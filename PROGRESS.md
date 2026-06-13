@@ -40,10 +40,11 @@ Done so far:
   watchlist, conflicts, correlations, search, settings.
 - `app/page.tsx` — redirects `/` to `/feed`.
 
-**Update (later same session):** the `never[]` error described below is now
-**FIXED** (root cause found and resolved — see postmortem). One unrelated,
-much smaller type error remains in `auth.ts`'s `session` callback. See
-"Known Issues" and "Next Session Must" for current status.
+**Update (later same session):** both the `never[]` error and the follow-up
+`{}`/`session` callback error described below are now **FIXED**.
+`npx tsc --noEmit` and `npm run build` both pass cleanly — all 12 routes
+build successfully (see postmortems for root causes). See "Known Issues" and
+"Next Session Must" for current status.
 
 ~~**Blocked on:** `npm run build` fails in `auth.ts` at the `.upsert()` call in
 the `signIn` callback:~~
@@ -103,15 +104,25 @@ access — batch them into one instruction set once the build passes locally.
 
 ## Known Issues
 
-1. **Build-blocking TypeScript error (`never[]` in `auth.ts`)** — see postmortem
-   below. Unresolved.
-2. `/Users/kevinyongcj/Programming/dew-news/scratch-test.ts` is a temporary
-   debug file at the project root, **not** gitignored. Must be deleted before
-   the Phase 1 commit.
-3. Nothing has been run end-to-end (no `npm run build`, no dev server, no
-   Supabase migration applied, no Vercel deploy) because of issue #1.
+1. ~~**Build-blocking TypeScript error (`never[]` in `auth.ts`)**~~ — **FIXED**,
+   see postmortem below.
+2. ~~**`Type '{}' is not assignable to type 'string'` in `auth.ts`'s `session`
+   callback**~~ — **FIXED**, see Postmortem 2 below.
+3. ~~`scratch-test.ts` temporary debug file~~ — deleted (created and removed
+   again during Postmortem 2's investigation).
+4. `npx tsc --noEmit` and `npm run build` both pass with **zero errors** as of
+   this session. Dev server smoke-test (local, unauthenticated) passed:
+   `/`, `/feed`, `/digest`, `/watchlist`, `/conflicts`, `/correlations`,
+   `/search`, `/settings` all 307-redirect to `/login` via `proxy.ts`;
+   `/login` renders 200 with "Sign in with Google"; `/api/auth/providers`
+   returns the Google provider config (correctly excluded from proxy
+   protection). Supabase migration has been run against the new project
+   (`hylhjbtxjewuvdrhgarn`, 16 tables confirmed via PostgREST) but Vercel
+   deploy and live login (actual OAuth flow) have not been verified — see
+   "Acceptance Criteria Status" (note: that section is stale, written against
+   the OLD Supabase project).
 
-### Postmortem: `never[]` TypeScript error in `auth.ts`
+### Postmortem: `never[]` TypeScript error in `auth.ts` (RESOLVED)
 
 **Symptom:** `createClient<Database>(...)` (in `lib/supabase/server.ts`) causes
 every `.from("<table>").upsert(...)` / `.insert(...)` / `.select(...)` call to
@@ -149,41 +160,171 @@ passed to `.upsert()` fails to type-check no matter what it contains.
    - **(a)** `createServiceClient()` in `lib/supabase/server.ts` returns
      `createClient<Database>(...)` with **no explicit return type
      annotation** — the return type is inferred rather than stated as
-     `SupabaseClient<Database>`. Confirmed via
-     `grep -n "createServiceClient\|SupabaseClient\|createClient" lib/supabase/server.ts`:
-     only `createClient<Database>(...)` appears, no `SupabaseClient<Database>`
-     annotation anywhere.
+     `SupabaseClient<Database>`.
    - **(b)** The top-level shape of `Database` in `types/database.ts` did not
-     match what's expected. Confirmed via `head -20 types/database.ts`: at the
-     time of the check, `Database` was declared as
-     `export interface Database { public: { ... } }` near the bottom of the
-     file, not as `export type Database = { public: { Tables: {` at the top.
+     match what's expected (`export interface Database { public: {...} }`
+     instead of `export type Database = { public: {...} }`).
 
-6. **Edit made but NOT YET VERIFIED**: changed
-   `export interface Database { public: {...} }` to
-   `export type Database = { public: {...} };` (closing brace updated to
-   `};`). `Views`/`Functions`/`Enums` are currently
-   `{ [_ in never]: never }`. This edit has **not** been checked with `tsc` or
-   `npm run build` — the session was paused before verification could run.
+6. **Both (a) and (b) were applied — neither was the actual fix.** After
+   applying both, `npx tsc --noEmit` still showed the identical `never[]`
+   errors. The **actual root cause** (found by writing a minimal repro):
+
+   ```ts
+   interface RowAsInterface { id: string; email: string; }
+   type RowAsType = { id: string; email: string; };
+   type Check1 = RowAsInterface extends Record<string, unknown> ? true : false; // false
+   type Check2 = RowAsType extends Record<string, unknown> ? true : false;      // true
+   ```
+
+   Every `*Row` / `UsersInsert` type in `types/database.ts` was declared as
+   `export interface X { ... }`. TypeScript `interface` declarations do
+   **not** satisfy `extends Record<string, unknown>` in a conditional type
+   check — even when structurally identical to a `type` alias that does. Since
+   postgrest-js's `GenericTable` requires `Row`/`Insert`/`Update` to extend
+   `Record<string, unknown>`, every table's `Schema` collapsed to `never`,
+   and the whole `Database["public"]` resolved to `never`.
+
+   **Fix applied:** converted all 17 `interface` declarations
+   (`UsersRow`, `UsersInsert`, `EntitiesRow`, `SourcesRow`, `FetchRunsRow`,
+   `DigestsRow`, `ItemsRow`, `ItemEntitiesRow`, `WatchlistRow`,
+   `AnnotationsRow`, `ConflictsRow`, `CorrelationsRow`, `SummariesRow`,
+   `ConflictsInSummariesRow`, `TokenUsageRow`, `ProcessingLogRow`,
+   `SettingsRow`) to `export type X = { ... };` via a one-off script.
+   (`ItemSentence`, a nested type used inside `ItemsRow.sentences`, was
+   correctly left as an `interface` — it doesn't need to satisfy
+   `Record<string, unknown>`.)
+
+   **Result:** the `never[]` errors at `auth.ts:39` and `auth.ts:62` are
+   **gone**, confirmed via `npx tsc --noEmit`. The `SupabaseClient<Database>`
+   return-type annotation on `createServiceClient()` (suspect (a)) was kept
+   in `lib/supabase/server.ts` as a correctness improvement even though it
+   wasn't the fix.
+
+### Postmortem 2: `Type '{}' is not assignable to type 'string'` in `auth.ts` (RESOLVED)
+
+**Symptom:** After the fix above, `npx tsc --noEmit` shows exactly one
+remaining error:
+
+```
+auth.ts(70,9): error TS2322: Type '{}' is not assignable to type 'string'.
+```
+
+In the `session` callback:
+
+```ts
+async session({ session, token }) {
+  const userId = token.userId;
+  if (userId && session.user) {
+    session.user.id = userId;   // <-- line 70: error here
+  }
+  return session;
+},
+```
+
+**Investigation so far:**
+- Confirmed (via deliberate `const _debug: never = ...` type-error probes)
+  that, *unnarrowed*: `token: JWT`, `token.userId: string | undefined`,
+  `session.user: AdapterUser & { id: string } & User`, and
+  `session.user.id: string`.
+- Inside `if (userId && session.user)`, the narrowed type of `userId`
+  collapses to `{}` instead of `string` — confirmed whether narrowing
+  `token.userId` directly or via a local `const userId = token.userId`.
+- A minimal repro (`interface Base extends Record<string, unknown> { foo?: string }`,
+  then `if (b.foo) { const y: string = b.foo }`) did **NOT** reproduce the
+  `{}` collapse — so this is not simply "optional string on a
+  `Record<string, unknown>`-extending interface narrowed with `&&`" in
+  isolation. There's something specific to the actual `JWT`/`Session` types
+  here.
+- Deleted stale `tsconfig.tsbuildinfo` — no change (rules out incremental
+  cache staleness).
+- Kevin's hypothesis: *"The `{}` collapse on `string | undefined` with `&&`
+  is a symptom of a deeper type inference issue, not a narrowing bug. Check
+  if `JWT` from `next-auth/jwt` is being imported from the wrong path or if
+  there are two conflicting `JWT` type definitions in scope."*
+- Checked for duplicate augmentations: `grep` across the project (excluding
+  `node_modules`) for `declare module "next-auth"` / `interface JWT` /
+  `interface Session` / `interface DefaultSession` — only **one** match,
+  `types/next-auth.d.ts` (shown below). No duplicates found.
+- Checked for duplicate package installs: searched `node_modules` for
+  `*/node_modules/next-auth` and `*/node_modules/@auth/core` (nested copies)
+  — only the top-level `node_modules/next-auth` and `node_modules/@auth/core`
+  exist. No duplicate/conflicting installs found.
+
+  This confirmed Kevin's hypothesis was on the right track — it was a
+  type-level conflict, just not a *duplicate* declaration. See below.
+
+**Root cause found:** `types/next-auth.d.ts` augmented
+`declare module "next-auth/jwt" { interface JWT { userId?: string } }`. But
+`next-auth/jwt.d.ts` is just `export * from "@auth/core/jwt"` — a **re-export**,
+not a local declaration. Module augmentation via `declare module` requires the
+target module to have its own declaration to merge with; re-exports don't
+provide one. So this augmentation created an orphaned `JWT` interface scoped
+to `"next-auth/jwt"` that never merged with the real `JWT` interface used by
+`@auth/core`'s `session`/`jwt` callback signatures (which import `JWT` directly
+from `@auth/core/jwt`, per `@auth/core/index.d.ts`).
+
+As a result, `token.userId` in the callbacks fell through to `JWT`'s
+`Record<string, unknown>` index signature and was typed as `unknown`. `unknown`
+narrowed via `if (x && ...)` collapses to `{}` (a documented TS quirk — `unknown`
+narrowed to "truthy" becomes `{}`, not a more specific type), hence
+`Type '{}' is not assignable to type 'string'`.
+
+**Verification:** built a minimal repro of the exact `NextAuth({ callbacks: { session(...) } })`
+call in `scratch-test.ts`. Probing with deliberately-wrong type annotations
+(`const _x: number = token.userId`) confirmed `token.userId: unknown`
+unnarrowed and `{}` narrowed — reproducing the error exactly.
+
+**Fix applied:** changed the augmentation target in `types/next-auth.d.ts`
+from `declare module "next-auth/jwt"` to `declare module "@auth/core/jwt"`:
+
+```ts
+declare module "@auth/core/jwt" {
+  interface JWT {
+    userId?: string;
+  }
+}
+```
+
+(The `declare module "next-auth"` augmentation for `Session.user.id` was left
+unchanged — `next-auth`'s own `index.d.ts` re-exports `Session` via
+`export type { Session, ... } from "@auth/core/types"`, but separately
+`@auth/core/index.d.ts` imports `Session` from `./types.js` directly for the
+`session` callback, and empirically this augmentation already worked
+correctly — only the `JWT`/`jwt` path was broken.)
+
+**Result:** `token.userId` is now `string | undefined` and narrows to `string`
+correctly. `npx tsc --noEmit` → zero errors. `npm run build` → succeeds, all
+12 routes (`/`, `/_not-found`, `/api/auth/[...nextauth]`, `/conflicts`,
+`/correlations`, `/digest`, `/feed`, `/login`, `/search`, `/settings`,
+`/watchlist`, proxy/middleware) build cleanly. `scratch-test.ts` deleted again.
 
 ## Next Session Must
 
-1. Run `npx tsc --noEmit` (or `npm run build`) as the **first** action to
-   check whether the `interface` → `type` edit to `Database` in
-   `types/database.ts` (item 6 above) resolved the `never[]` error.
-2. If the error persists, apply suspect (a): give `createServiceClient()` in
-   `lib/supabase/server.ts` an explicit return type of
-   `SupabaseClient<Database>` (import `SupabaseClient` from
-   `@supabase/supabase-js`), then re-run `tsc --noEmit` once.
-3. Once `auth.ts` type-checks, run `npm run build` for the whole project and
-   fix any remaining errors.
-4. Delete `/Users/kevinyongcj/Programming/dew-news/scratch-test.ts` before
-   committing.
-5. Resume the original Phase 1 checklist: verify `proxy.ts` route protection,
-   verify the login page and dashboard placeholder pages render, commit Phase
-   1 code, then produce the single batched instruction set for Kevin covering
-   (a) running `0001_init.sql` and `0002_seed_source.sql` in the Supabase SQL
-   editor, and (b) Vercel project creation, environment variables, and the
-   `markets.dew.codes` custom domain.
-6. Update this file's "Completed Phases" / "Current Phase" / "Known Issues"
-   sections once the build passes and Phase 1's acceptance criteria are met.
+1. Start the dev server (`npm run dev`) and smoke-test locally: visit
+   `/login`, confirm Google sign-in button renders, confirm `/feed` etc.
+   redirect to `/login` when unauthenticated (via `proxy.ts`).
+2. Resume the original Phase 1 checklist (TodoWrite items 7-10): verify
+   `proxy.ts` route protection, verify the login page and dashboard
+   placeholder pages render correctly.
+3. Commit Phase 1 code (TodoWrite item 12) — working tree currently has
+   uncommitted changes to `types/database.ts`, `types/next-auth.d.ts`,
+   `lib/supabase/server.ts`, `auth.ts`, `.env.local` (gitignored), and this
+   `PROGRESS.md`.
+4. Re-verify Phase 1 acceptance criteria against the **current** state
+   (the "Acceptance Criteria Status" section above is stale — written against
+   the OLD, deleted Supabase project `vzbfzoqmjukdgrbtbsei` with zero tables):
+   - Supabase: re-query `{NEXT_PUBLIC_SUPABASE_URL}/rest/v1/` with the
+     service-role key against the NEW project (`hylhjbtxjewuvdrhgarn`) and
+     confirm all 16 tables + RLS.
+   - Vercel: confirm whether a Vercel project/deployment now exists (env vars
+     were configured conversationally this session but `npx vercel --prod`
+     has not been run).
+   - Login + session persistence: only testable once deployed (or via
+     `npm run dev` locally with `NEXTAUTH_URL=http://localhost:3000`).
+5. Once local smoke-test + acceptance criteria are addressed, produce the
+   single batched instruction set for Kevin covering (a) running
+   `0001_init.sql`/`0002_seed_source.sql` if not already applied to the new
+   project, and (b) `npx vercel --prod` / Vercel domain config for
+   `markets.dew.codes`.
+6. Update "Completed Phases" / "Current Phase" / "Acceptance Criteria Status"
+   once Phase 1's criteria are verifiably met.
