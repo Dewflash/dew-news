@@ -3,9 +3,9 @@ import { signIn } from "@/auth";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: { error?: string };
 }) {
-  const { error } = await searchParams;
+  const { error } = searchParams;
 
   return (
     <main className="flex min-h-screen flex-1 flex-col items-center justify-center bg-background px-4">

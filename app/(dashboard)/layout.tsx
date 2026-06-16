@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { auth, signOut } from "@/auth";
 
 const NAV_LINKS = [
@@ -17,6 +18,7 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }>) {
   const session = await auth();
+  if (!session?.user) redirect("/login");
 
   return (
     <div className="flex min-h-screen flex-col">

@@ -5,13 +5,17 @@ import { createServiceClient } from "@/lib/supabase/server";
 const AUTHORISED_EMAIL = "dewlearns@gmail.com";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  pages: {
+    signIn: "/login",
+  },
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       authorization: {
         params: {
-          scope: "openid email profile https://www.googleapis.com/auth/gmail.readonly",
+          scope:
+            "openid email profile https://www.googleapis.com/auth/gmail.readonly",
           access_type: "offline",
           prompt: "consent",
         },
@@ -19,13 +23,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   secret: process.env.NEXTAUTH_SECRET,
-  pages: {
-    signIn: "/login",
-  },
   session: {
     strategy: "jwt",
-    maxAge: 30 * 24 * 60 * 60, // 30 days
-    updateAge: 60 * 60 * 24, // refresh once per day
+    maxAge: 30 * 24 * 60 * 60,
+    updateAge: 60 * 60 * 24,
   },
   callbacks: {
     async signIn({ user }) {
