@@ -6,7 +6,7 @@ import { ItemCard } from "@/components/feed/ItemCard";
 import { formatReadingTime } from "@/lib/format";
 import { ALL_CATEGORIES } from "@/lib/categories";
 import type { Sentiment } from "@/types/database";
-import type { FeedItem } from "@/app/(dashboard)/feed/page";
+import type { DisplayItem as FeedItem } from "@/lib/items";
 
 const SENTIMENT_ORDER: Record<Sentiment, number> = { bullish: 0, mixed: 1, neutral: 2, bearish: 3 };
 

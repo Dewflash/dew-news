@@ -12,6 +12,15 @@ const NAV_LINKS = [
   { href: "/settings", label: "Settings" },
 ];
 
+/** Section 9.1: mobile bottom tab bar covers the 5 most-used views. */
+const MOBILE_NAV_LINKS = [
+  { href: "/feed", label: "Feed", icon: "📰" },
+  { href: "/digest", label: "Digest", icon: "🗞️" },
+  { href: "/watchlist", label: "Watchlist", icon: "⭐" },
+  { href: "/search", label: "Search", icon: "🔍" },
+  { href: "/settings", label: "Settings", icon: "⚙️" },
+];
+
 export default async function DashboardLayout({
   children,
 }: Readonly<{
@@ -45,7 +54,20 @@ export default async function DashboardLayout({
           </button>
         </form>
       </header>
-      <main className="flex-1 px-4 py-6">{children}</main>
+      <main className="flex-1 px-4 py-6 pb-20 sm:pb-6">{children}</main>
+
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-white/10 bg-card sm:hidden">
+        {MOBILE_NAV_LINKS.map((link) => (
+          <Link
+            key={link.href}
+            href={link.href}
+            className="flex flex-1 flex-col items-center gap-0.5 py-2 text-xs text-gray-400 hover:text-white"
+          >
+            <span className="text-base">{link.icon}</span>
+            {link.label}
+          </Link>
+        ))}
+      </nav>
     </div>
   );
 }

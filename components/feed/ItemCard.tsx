@@ -5,7 +5,7 @@ import { SentimentBadge, SignificanceDot } from "@/components/ui/Badge";
 import { Pill } from "@/components/ui/Pill";
 import { formatReadingTime } from "@/lib/format";
 import type { CardDensity } from "@/types/database";
-import type { FeedItem } from "@/app/(dashboard)/feed/page";
+import type { DisplayItem } from "@/lib/items";
 
 function formatDate(dateStr: string): string {
   return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString("en-SG", {
@@ -21,7 +21,7 @@ export function ItemCard({
   showSentimentBadge,
   showReadingTime,
 }: {
-  item: FeedItem;
+  item: DisplayItem;
   density: CardDensity;
   showSentimentBadge: boolean;
   showReadingTime: boolean;

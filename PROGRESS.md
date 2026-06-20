@@ -3,11 +3,100 @@
 ## Completed Phases
 **Phase 1 — Foundation** ✅ (completed 2026-06-20)
 **Phase 2a — Feed UI** ✅ (completed 2026-06-20)
+**Phase 2b — Supporting Views UI** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 2b — Supporting Views UI — not yet started
+Phase 3 — Annotation Layer — not yet started
 
 ---
+
+## Phase 2b — Supporting Views UI (2026-06-21)
+
+Built per SPEC.md Section 9.3–9.8 and Section 15 (Phase 2b). All views render
+against the Phase 2a seed data; all write actions are real Supabase Server
+Actions (no mocked state).
+
+**Shared refactor:** Extracted `lib/items.ts` (`DisplayItem` type +
+`buildDisplayItems()`) out of `feed/page.tsx` so the Feed and Search views
+share the same item-shape-building logic (entities, source name, conflict/
+correlation/watchlist flags) instead of duplicating it.
+
+**Digest (`/digest`):** `components/digest/DigestClient.tsx` — Weekly/Monthly
+tabs, summary cards (period, dominant sentiment, item count, key theme pills),
+tap-to-expand full content, pin/unpin via `lib/actions/digest.ts`, "Generated
+by AI" label, per-tab empty states.
+
+**Watchlist (`/watchlist`):** `components/watchlist/WatchlistClient.tsx` —
+static list (name/ticker/type/notes/alert threshold) with up/down priority
+reorder and remove, add-entity-by-name form (creates the entity if it doesn't
+exist); Trending This Week section computed server-side in
+`watchlist/page.tsx` from `item_entities`/`items` (mention count over the
+last 7 days, trend arrow vs the prior 7 days, dominant sentiment), with a
+one-tap promote into the static list. All via `lib/actions/watchlist.ts`.
+
+**Conflicts (`/conflicts`):** `components/conflicts/ConflictsClient.tsx` —
+list (unacknowledged sorted first), entity + days-apart badges, both linked
+item summaries, acknowledge/unacknowledge and resolve-with-note actions
+(`lib/actions/conflicts.ts`), All/Unacknowledged/Resolved filter.
+
+**Correlations (`/correlations`):** `components/correlations/CorrelationsClient.tsx`
+— list, direction badge, confidence %, both linked item summaries + categories,
+dismiss action (`lib/actions/correlations.ts`), All/High confidence/Dismissed
+filter.
+
+**Search (`/search`):** `lib/search.ts` implements Section 9.7 exactly as
+specified — Supabase `textSearch` on the generated `search_vector` column
+unioned with a separate entity-name `ilike` lookup (via `item_entities`),
+deduplicated by item id, no client-side fallback. `components/search/SearchForm.tsx`
+drives the query via URL search params (category/sentiment/significance/date
+range filters layered on top of the search results in `search/page.tsx`);
+results grouped by date, rendered with the same `ItemCard` as the feed.
+
+**Settings (`/settings`):** `components/settings/SettingsClient.tsx` — all six
+Section 9.8 sections (AI Provider, Data Sources, Extraction, Display, Digests,
+System), each backed by a real `settings` row (auto-created on first visit if
+missing) via `lib/actions/settings.ts`. Data Sources section does full CRUD
+against the real `sources` table. System section shows the real last
+`fetch_runs` row, `processing_log` (empty — pipeline not built yet),
+`token_usage` aggregated for the current month (empty for the same reason),
+and live `items`/`annotations`/`entities` counts for DB stats.
+
+**Global nav:** Added a mobile bottom tab bar (Feed/Digest/Watchlist/Search/
+Settings, per Section 9.1's "5 most used views") to `app/(dashboard)/layout.tsx`,
+shown below `sm` breakpoint alongside the existing desktop top nav.
+
+**Verified:** `npx tsc --noEmit` and `npm run build` both clean (all 7 routes
+compile and prerender without error). Dev server starts cleanly. Browser
+click-through across all 7 views, the mobile tab bar, and the feed's "View
+conflict"/"View correlation" links was handed to Kevin to confirm visually
+(no browser-driving tool available in this environment) — pending his
+confirmation before this is fully closed out.
+
+### Deviations / notes
+- **Watchlist drag-to-reorder → up/down buttons.** Spec says "drag to
+  reorder priority"; implemented as up/down arrow buttons swapping priority
+  values instead of pulling in a drag-and-drop library. Functionally
+  equivalent for a single-user list of ~5-10 entities; flagging in case a
+  true drag interaction is wanted later.
+- **"Fetch Now" and "Export annotations" are visibly present but disabled**,
+  with a tooltip explaining why: the email fetch pipeline (Phase 4/5) and the
+  annotations table (Phase 3) don't exist yet, so these buttons would have
+  nothing real to do. Per Section 9.8 they're part of the Settings layout, so
+  they're rendered rather than omitted, but wiring them up is correctly out
+  of scope for Phase 2b.
+- **Settings `active_categories` default (set in Phase 1's migration) doesn't
+  exactly match the Section 5 category taxonomy** (e.g. "Technology" instead
+  of "Information Technology", no separate "Consumer Discretionary"/"Consumer
+  Staples"). Pre-existing from Phase 1, not introduced this session. The
+  Extraction section's category toggle list itself uses the correct
+  `lib/categories.ts` taxonomy; only the stored default values inherit the
+  old naming until a settings row is edited or a migration corrects the
+  default. Flagging for cleanup whenever Phase 1's schema gets revisited.
+- **Cron schedule human-readable preview is a minimal heuristic**
+  (`lib/format.ts` `cronToHuman()`), handling only the `M H * * *` / `M H * * D`
+  shapes this app actually uses (e.g. "0 6 * * *" → "Every day at 06:00").
+  Arbitrary cron expressions fall back to showing the raw string. Sufficient
+  for this app's one fetch schedule; not a general cron parser.
 
 ## Phase 2a — Feed UI (2026-06-20)
 
