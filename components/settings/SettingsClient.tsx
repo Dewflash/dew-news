@@ -492,14 +492,12 @@ function SystemSection({
       </div>
 
       <div>
-        <button
-          type="button"
-          disabled
-          title="Annotations land in Phase 3 — nothing to export yet"
-          className="rounded bg-white/10 px-3 py-1.5 text-sm text-gray-400 opacity-60"
+        <a
+          href={`/api/export/annotations?format=${settings.export_format}`}
+          className="inline-block rounded bg-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/20"
         >
           Export annotations ({settings.export_format.toUpperCase()})
-        </button>
+        </a>
         <select
           value={settings.export_format}
           onChange={(e) => startTransition(() => updateSettings({ export_format: e.target.value as ExportFormat }))}

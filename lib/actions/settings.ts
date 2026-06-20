@@ -2,15 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
+import { getUserId } from "@/lib/user";
 import type { SettingsUpdate } from "@/types/database";
-
-const USER_EMAIL = "dewlearns@gmail.com";
-
-async function getUserId(supabase: ReturnType<typeof createServiceClient>) {
-  const { data, error } = await supabase.from("users").select("id").eq("email", USER_EMAIL).single();
-  if (error) throw new Error(error.message);
-  return data.id;
-}
 
 export async function updateSettings(patch: SettingsUpdate) {
   const supabase = createServiceClient();

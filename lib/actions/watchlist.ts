@@ -2,14 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
-
-const USER_EMAIL = "dewlearns@gmail.com";
-
-async function getUserId(supabase: ReturnType<typeof createServiceClient>) {
-  const { data, error } = await supabase.from("users").select("id").eq("email", USER_EMAIL).single();
-  if (error) throw new Error(error.message);
-  return data.id;
-}
+import { getUserId } from "@/lib/user";
 
 export async function addToWatchlist(entityName: string) {
   const supabase = createServiceClient();

@@ -1,11 +1,13 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { FeedClient } from "@/components/feed/FeedClient";
 import { buildDisplayItems, type DisplayItem, type RawItemRow } from "@/lib/items";
+import { getUserId } from "@/lib/user";
 
 export type { DisplayItem as FeedItem } from "@/lib/items";
 
 export default async function FeedPage() {
   const supabase = createServiceClient();
+  const userId = await getUserId(supabase);
 
   const { data: rawItems, error: itemsError } = await supabase
     .from("items")
@@ -28,11 +30,18 @@ export default async function FeedPage() {
     .eq("type", "static")
     .eq("is_active", true);
 
+  const { data: annotations } = await supabase
+    .from("annotations")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("is_deleted", false);
+
   const items: DisplayItem[] = buildDisplayItems(
     rawItems ?? [],
     conflicts ?? [],
     correlations ?? [],
-    watchlist ?? []
+    watchlist ?? [],
+    annotations ?? []
   );
 
   return <FeedClient items={items} />;

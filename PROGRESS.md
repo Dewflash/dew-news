@@ -4,9 +4,48 @@
 **Phase 1 — Foundation** ✅ (completed 2026-06-20)
 **Phase 2a — Feed UI** ✅ (completed 2026-06-20)
 **Phase 2b — Supporting Views UI** ✅ (completed 2026-06-21)
+**Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 3 — Annotation Layer — not yet started
+Phase 4 — Ingestion Pipeline — not yet started
+
+---
+
+## Phase 3 — Annotation Layer (2026-06-21)
+
+**Goal:** Fully working annotation system persisting to Supabase (SPEC.md Section 10 + Section 15 Phase 3).
+
+### What was built
+- `lib/actions/annotations.ts` — three server actions, all soft-delete (`is_deleted`) and `revalidatePath("/feed")` + `revalidatePath("/search")`:
+  - `toggleHighlight(itemId, sentenceIndex, colour)` — tapping the active colour again removes the highlight (per Section 10.2); tapping a different colour replaces it. Looks up the existing non-deleted highlight row for that sentence rather than relying on a DB unique constraint (none exists on `annotations`), since only one highlight colour is allowed per sentence.
+  - `toggleStar(itemId)` — whole-item annotation, `sentence_index IS NULL`.
+  - `saveNote(itemId, sentenceIndex, noteText)` — sentence-level or whole-item (`sentenceIndex = null`) free-text note; saving an empty string soft-deletes the existing note.
+- `lib/user.ts` (new) — extracted the `USER_EMAIL` / `getUserId()` helper that had been duplicated in `watchlist.ts` and `settings.ts`; all three action modules and `lib/search.ts` / `feed/page.tsx` now share it.
+- `lib/items.ts` — `DisplayItem` gained an `annotations: AnnotationsRow[]` field; `buildDisplayItems()` takes an optional 5th `annotations` argument and groups it by `item_id`. Both `feed/page.tsx` and `lib/search.ts` now fetch the current user's non-deleted annotations and pass them through, so highlights/stars/notes hydrate correctly on both the Feed and Search views.
+- `components/feed/ItemCard.tsx` — full rewrite of the expanded-card interaction:
+  - Each sentence is its own `Sentence` component. Desktop: click toggles the action bar open/closed. Mobile: a `touchstart`/`touchmove`/`touchend` timer (activate only if held ≥ 500ms and moved < 10px) per the Section 10.2 iOS Safari note — `preventDefault()` is called on a successful long-press so the native text-selection menu never appears, and a `suppressClickRef` swallows the synthetic click that follows a short tap so quick taps do nothing (only long-press activates on touch devices).
+  - Action bar: three highlight-colour dots (yellow/green/red, ring-highlighted if active) + an "Add note"/"Edit note" button. Only one sentence's bar is open at a time.
+  - Highlighted sentences get a translucent background tint (`bg-yellow-500/30` / `bg-bullish/30` / `bg-bearish/30`) so the colour reads correctly against the existing dark theme tokens.
+  - Sentence notes show a 💬 icon with the note text in its `title` (hover/tap-to-reveal per Section 10.4); editing opens an inline textarea with Save/Cancel.
+  - Whole-item star button (★/☆) and whole-item note (separate from sentence notes, `sentence_index = null`) live below the sentence list, alongside the existing "View conflict"/"View correlation" links.
+  - Collapsed-card badge row now shows a filled star if the item is starred and a highlight count (`✎ N`) if any sentences are highlighted, per Section 9.2/10.3.
+- `lib/export.ts` + `app/api/export/annotations/route.ts` — Section 10.5 export. `buildAnnotationExport()` fetches all non-deleted annotations for the user, joins each to its item (date, summary, sentence text by index, GICS sector, secondary categories, significance, sentiment) and to that item's entity names, producing the exact row shape from the spec's JSON example. `annotationExportToCsv()` flattens the same rows to CSV (arrays joined with `; `, fields quoted/escaped only when they contain a comma/quote/newline). The route checks `auth()` and returns 401 if not logged in; `?format=csv` returns `text/csv`, otherwise pretty-printed JSON; both set `Content-Disposition: attachment` so the browser downloads a file directly.
+- `components/settings/SettingsClient.tsx` — the previously-disabled "Export annotations" button is now a real `<a href="/api/export/annotations?format=...">` download link, reading the live `export_format` setting so the existing format `<select>` (already wired to `updateSettings`) controls which file format gets downloaded.
+
+### Verified
+- `npx tsc --noEmit` — clean.
+- `npm run build` — clean; `/api/export/annotations` compiles as a dynamic route alongside the existing pages.
+- `npm run dev` — starts with no runtime errors.
+- Browser click-through (long-press on a real touch device, highlight persistence across reload, note editing, star toggle, export download in both formats) has **not** been verified by Claude Code — no browser-driving tool is available in this environment. Handed to Kevin to verify manually per the Phase 3 acceptance criteria below.
+
+### Deviations / notes
+- **No true optimistic UI yet.** Annotation actions call the server action via `useTransition` and rely on `revalidatePath` + Server Component refetch to reflect the change, the same pattern already used for pin/acknowledge/dismiss in Phase 2b. SPEC.md Section 17.1 asks for "Annotation save < 200ms (optimistic UI, background sync)," but Section 15 Phase 6 task 7 explicitly schedules "optimistic UI for annotations" as a later polish pass — so this is deferred by design, not an oversight.
+- `annotations` has no DB-level unique constraint on `(user_id, item_id, sentence_index, annotation_type)`, so each server action does a `select` for the existing row before deciding to insert/update/soft-delete, rather than using `upsert`. Functionally equivalent for a single-user app with no concurrent writers.
+- CSV export escaping is minimal (RFC4180-style quoting only when needed) — sufficient for this dataset size, not a full CSV library.
+
+### What Phase 4 needs
+- A working `lib/gmail/client.ts` + AI provider abstraction to actually populate `items`/`entities` from real Gmail newsletters — annotations, search, and all Phase 2b/3 views are currently only exercised against seed data.
+- The Settings "Fetch Now" button and fetch-run status display are still stubbed/disabled pending the real pipeline.
 
 ---
 

@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { buildDisplayItems, type DisplayItem, type RawItemRow } from "@/lib/items";
+import { getUserId } from "@/lib/user";
 
 /**
  * Per SPEC.md Section 9.7: always use Supabase full-text search, no
@@ -32,7 +33,19 @@ export async function searchItems(query: string): Promise<DisplayItem[]> {
     entityItemIds = (entityMatches ?? []).map((m) => m.item_id);
   }
 
-  const itemIds = Array.from(new Set([...(textMatches ?? []).map((m) => m.id), ...entityItemIds]));
+  const userId = await getUserId(supabase);
+  const { data: noteMatches } = await supabase
+    .from("annotations")
+    .select("item_id")
+    .eq("user_id", userId)
+    .eq("is_deleted", false)
+    .eq("annotation_type", "note")
+    .ilike("note_text", `%${trimmed}%`);
+  const noteItemIds = (noteMatches ?? []).map((m) => m.item_id);
+
+  const itemIds = Array.from(
+    new Set([...(textMatches ?? []).map((m) => m.id), ...entityItemIds, ...noteItemIds])
+  );
   if (itemIds.length === 0) return [];
 
   const { data: rawItems, error: itemsError } = await supabase
@@ -55,5 +68,12 @@ export async function searchItems(query: string): Promise<DisplayItem[]> {
     .eq("type", "static")
     .eq("is_active", true);
 
-  return buildDisplayItems(rawItems ?? [], conflicts ?? [], correlations ?? [], watchlist ?? []);
+  const { data: annotations } = await supabase
+    .from("annotations")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("is_deleted", false)
+    .in("item_id", itemIds);
+
+  return buildDisplayItems(rawItems ?? [], conflicts ?? [], correlations ?? [], watchlist ?? [], annotations ?? []);
 }

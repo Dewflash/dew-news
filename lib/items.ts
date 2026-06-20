@@ -1,4 +1,4 @@
-import type { EntityRelevance, EntityType, ItemsRow } from "@/types/database";
+import type { AnnotationsRow, EntityRelevance, EntityType, ItemsRow } from "@/types/database";
 
 export interface DisplayItemEntity {
   id: string;
@@ -16,6 +16,8 @@ export interface DisplayItem extends ItemsRow {
   hasCorrelation: boolean;
   correlationSummary: string | null;
   isWatched: boolean;
+  /** Non-deleted annotations for this item, hydrated from the DB (Section 10). */
+  annotations: AnnotationsRow[];
 }
 
 export interface RawItemRow extends ItemsRow {
@@ -30,8 +32,16 @@ export function buildDisplayItems(
   rawItems: RawItemRow[],
   conflicts: Array<{ item_a_id: string; item_b_id: string; conflict_summary: string }>,
   correlations: Array<{ item_a_id: string; item_b_id: string; correlation_summary: string }>,
-  watchlist: Array<{ entity_id: string; alert_threshold: number }>
+  watchlist: Array<{ entity_id: string; alert_threshold: number }>,
+  annotations: AnnotationsRow[] = []
 ): DisplayItem[] {
+  const annotationsByItemId = new Map<string, AnnotationsRow[]>();
+  for (const a of annotations) {
+    const list = annotationsByItemId.get(a.item_id);
+    if (list) list.push(a);
+    else annotationsByItemId.set(a.item_id, [a]);
+  }
+
   const conflictByItemId = new Map<string, string>();
   for (const c of conflicts) {
     conflictByItemId.set(c.item_a_id, c.conflict_summary);
@@ -69,6 +79,7 @@ export function buildDisplayItems(
       hasCorrelation: correlationByItemId.has(row.id),
       correlationSummary: correlationByItemId.get(row.id) ?? null,
       isWatched,
+      annotations: annotationsByItemId.get(row.id) ?? [],
     };
   });
 }
