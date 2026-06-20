@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { ALL_CATEGORIES } from "@/lib/categories";
 import { cronToHuman } from "@/lib/format";
 import { addSource, deleteSource, toggleSource, updateSettings } from "@/lib/actions/settings";
+import { triggerFetch } from "@/lib/actions/fetch";
 import type {
   ActiveProvider,
   CardDensity,
@@ -417,27 +418,40 @@ function SystemSection({
   tokenUsage: { totalTokens: number; totalCostUsd: number; byProvider: Record<string, number> };
   dbStats: { totalItems: number; dateRangeStart: string | null; dateRangeEnd: string | null; totalAnnotations: number; totalEntities: number };
 }) {
-  const [, startTransition] = useTransition();
+  const [isFetching, startTransition] = useTransition();
   const [logLevel, setLogLevel] = useState<"all" | "info" | "warning" | "error">("all");
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const filteredLog = processingLog.filter((l) => logLevel === "all" || l.level === logLevel);
+
+  function handleFetchNow() {
+    setFetchError(null);
+    startTransition(async () => {
+      try {
+        await triggerFetch();
+      } catch (err) {
+        setFetchError(err instanceof Error ? err.message : String(err));
+      }
+    });
+  }
 
   return (
     <Section title="System">
       <div>
         <button
           type="button"
-          disabled
-          title="Email fetch pipeline lands in Phase 4/5 — not yet implemented"
-          className="rounded bg-white/10 px-3 py-1.5 text-sm text-gray-400 opacity-60"
+          disabled={isFetching}
+          onClick={handleFetchNow}
+          className="rounded bg-accent px-3 py-1.5 text-sm text-white disabled:opacity-50"
         >
-          Fetch Now
+          {isFetching ? "Fetching…" : "Fetch Now"}
         </button>
         <p className="mt-1 text-xs text-gray-500">
           {lastFetchRun
             ? `Last run: ${lastFetchRun.status} (${new Date(lastFetchRun.started_at).toLocaleString("en-SG")})`
             : "No fetch runs yet."}
         </p>
+        {fetchError && <p className="mt-1 text-xs text-bearish">Fetch failed: {fetchError}</p>}
       </div>
 
       <div>

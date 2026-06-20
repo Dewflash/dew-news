@@ -7,7 +7,53 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 4 — Ingestion Pipeline — not yet started
+Phase 4 — Ingestion Pipeline — built in full, **blocked on Kevin bootstrapping `GOOGLE_REFRESH_TOKEN`** before it can run against real Gmail (see below).
+
+## Phase 4 — Ingestion Pipeline (2026-06-21)
+
+Built per SPEC.md Section 7, Section 8, Section 6, and Section 15 (Phase 4). Split into three parts (Gmail ingestion → AI extraction → orchestration/UI) since they're independently testable layers.
+
+### Part 4a — Gmail ingestion
+- `lib/gmail/client.ts` — Gmail API client (`googleapis`), authenticated via a refresh token (not the NextAuth session — the pipeline runs unattended, so it needs its own offline grant). `searchMessages()` paginates `messages.list`; `getMessage()` fetches one message `format: "full"`.
+- `lib/gmail/query.ts` — `buildSearchQuery()`: Section 8.2's rolling-24h `from:(...) after:...` query, built from active `sources`, handling the `%@domain` wildcard pattern from Section 4.2.
+- `lib/gmail/extract.ts` — Section 8.3: prefers `text/plain`, falls back to `text/html` (tag-stripped, entity-decoded, whitespace-collapsed), then truncates at the first line matching a common unsubscribe/legal-footer pattern.
+- `scripts/get-gmail-refresh-token.ts` (`npm run gmail:auth`) — one-time local OAuth flow to obtain the refresh token, since NextAuth's login flow requests the `gmail.readonly` scope (already in `auth.ts`) but never persists `account.refresh_token` anywhere, and the pipeline needs a long-lived token independent of any browser session.
+
+### Part 4b — AI extraction
+- `lib/ai/provider.ts` — Section 6.1's `AIProvider` interface, exactly as specified, plus the result/error types for all five methods. `getAIProvider()` is the Section 6.3 factory (provider/model/temperature passed in from settings at call time). Only `claude` is implemented; any other provider name throws "not implemented yet (Phase 5)".
+- `lib/claude.ts` — `ClaudeProvider` via `@anthropic-ai/sdk`. Implements `extract()` and `dedup()` (Phase 4 tasks 5–7,10); `summarise()`/`detectConflicts()`/`detectCorrelations()` throw explicitly — those are Phase 5/6 pipeline stages per Section 15, not implemented yet by design. Includes the Section 17.2 exponential-backoff retry (max 3 attempts) around every API call, and strips markdown code fences before `JSON.parse` in case the model wraps its output despite instructions.
+- `lib/prompts/extraction.ts` / `lib/prompts/dedup.ts` — Section 7.2/7.3 prompts, copied verbatim (Section 19 Rule 6). The extraction prompt has no explicit placeholder for the newsletter body itself in the spec text, so the cleaned email body is appended after the prompt under a `Newsletter body:` heading — flagging as a minor interpretation, not a prompt rewrite.
+
+### Part 4c — Orchestration, persistence, Settings UI
+- `lib/ingestion/entities.ts` — `upsertEntity()`: exact-name match against `entities` (Section 4.6's `UNIQUE(user_id, name)`), bumping `mention_count`/`last_seen` on repeat sightings; invalid `type` values from the model fall back to `"other"` rather than failing the CHECK constraint.
+- `lib/ingestion/save-item.ts` — `saveExtractedItem()`: inserts the item row (computing `reading_time_seconds` per Section 7.7), sanitises `gics_sector` against `GICS_SECTORS` and `secondary_categories` against `EXTENDED_CATEGORIES` (the prompt's "approved list" is the extended categories only, capped at 3), then links each extracted entity via `item_entities` (upserted on `(item_id, entity_id)`).
+- `lib/ingestion/match-source.ts` — maps an email's `From` header back to the `sources` row that matched the Gmail query (domain-wildcard or exact), so `digests.source_id` is set correctly even when multiple sources are active.
+- `lib/ingestion/log.ts` / `lib/ingestion/token-usage.ts` — `processing_log` and `token_usage` write helpers (Section 17.3/4.14). Cost estimation uses a small hardcoded USD/M-token table for known Claude models; per Section 6.3 the model field is free text, so an unrecognised model logs token counts with a `null` cost rather than guessing.
+- `lib/ingestion/run.ts` — `runFetch(triggeredBy)`: the Section 7.1 pipeline (create `fetch_run` → search Gmail → per email: create `digest`, extract, save items, log tokens → dedup pass across all new items vs. today's existing items → finalise `fetch_run` status). Section 8.4's error handling is implemented per-email (one failed digest → `partial`, all failed → `failed`, zero emails found → `success` with an info log, not an error). Conflict/correlation detection, watchlist dynamic scores, and RAG context injection are intentionally not called here — Section 15 schedules them for Phase 5.
+- `lib/actions/fetch.ts` — `triggerFetch()` server action wired to the previously-disabled "Fetch Now" button in `components/settings/SettingsClient.tsx`, which now shows a "Fetching…" state and surfaces any thrown error inline. The last-run status, processing log, and token usage displays in Settings (built in Phase 2b against empty tables) needed no changes — they already read live data and will populate once a real fetch runs.
+
+### Verified
+- `npx tsc --noEmit` — clean.
+- `npm run build` — clean, all routes still compile.
+- Dev server starts with no runtime errors.
+- **Not verified: an actual end-to-end fetch against real Gmail.** `GOOGLE_REFRESH_TOKEN` in `.env.local` is currently empty — Kevin needs to:
+  1. Add `http://localhost:53682/oauth/callback` as an Authorized redirect URI on the existing Google OAuth client (Google Cloud Console → Credentials).
+  2. Run `npm run gmail:auth`, approve access as `dewlearns@gmail.com`.
+  3. Paste the printed `GOOGLE_REFRESH_TOKEN` into `.env.local` and into the Vercel project's environment variables.
+  4. Click "Fetch Now" in Settings against a real Reuters email to confirm the Phase 4 acceptance criteria end-to-end.
+- Browser click-through of the "Fetch Now" button's loading/error states has not been verified by Claude Code (no browser-driving tool available).
+
+### Deviations / notes
+- **`min_significance` and `active_categories` settings are applied at save time**, not specified explicitly in Section 7/8 — interpreted as: items below `min_significance` are dropped before saving (so they never reach the DB at all, rather than being saved and hidden by feed filters). `active_categories` is not yet enforced (no spec text on how it should gate extraction/save) — flagging as an open question rather than guessing further.
+- Gmail integration uses the `googleapis` package and Claude extraction uses `@anthropic-ai/sdk` (both official SDKs) — not explicitly required by spec, but consistent with "choose the closest alternative" (Section 19 Rule 7) over hand-rolled REST clients.
+- `digests.email_date`/`received_at` parsing assumes the `Date` header and `internalDate` are both present and parseable; Section 8.2's date-normalisation fallback (event date → email send date in SGT) is applied inside the extraction prompt's own date inference, not re-derived here.
+
+### What Phase 5 needs
+- RAG context building (`extract()`'s `ragContext` param already exists on the interface, unused so far).
+- Conflict/correlation detection passes (`ClaudeProvider.detectConflicts`/`detectCorrelations` currently throw on purpose).
+- Watchlist dynamic score recalculation.
+- Vercel cron + `/api/cron/fetch` (the Section 14.1 cron secret endpoint) — `runFetch("cron")` already supports this trigger type, just unwired.
+- Gemini/OpenAI provider implementations behind `getAIProvider()`.
 
 ---
 
