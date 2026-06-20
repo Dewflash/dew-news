@@ -1,41 +1,48 @@
 # Build Progress
 
 ## Completed Phases
-(none yet — Phase 1 deployed but awaiting DNS + login verification)
+**Phase 1 — Foundation** ✅ (completed 2026-06-20)
 
 ## Current Phase
-Phase 1 — Foundation
+Phase 2 — not yet started
 
 ---
 
-## Deployment Status (as of 2026-06-17)
+## Phase 1 — Final Status (2026-06-20)
 
-The app is deployed and running on Vercel. All routes serve correctly:
-- `/login` → 200 OK
-- `/feed` (unauthenticated) → 307 → `/login`
-- All dashboard routes redirect to `/login` when no session
+All acceptance criteria met:
+- ✅ Login at `https://markets.dew.codes` via Google OAuth (`dewlearns@gmail.com` only)
+- ✅ Session persists across page refresh
+- ✅ Supabase `users` table has a row, created via the `signIn` callback,
+  with `last_login` updating on each sign-in
+- ✅ All 16 tables + RLS deployed to Supabase project `hylhjbtxjewuvdrhgarn`
+- ✅ DNS CNAME propagated, SSL auto-issued by Vercel
 
-**Production URL:** https://dew-news-czghxm6gt-dewflash-s-projects.vercel.app  
-**Target URL:** https://markets.dew.codes (Vercel-side configured, DNS pending)
+**Production URL:** https://markets.dew.codes
 
-### Remaining before Phase 1 is complete
+### Mid-flight complication: lost Google account
 
-1. **DNS CNAME** — add to your DNS provider:
-   - Host: `markets`
-   - Type: CNAME
-   - Value: `cname.vercel-dns.com`
+The original Google account hosting the OAuth client was lost partway through
+deployment. A new OAuth 2.0 Client ID was created under a new account/project.
+Steps taken:
+1. New Client ID + Secret generated in Google Cloud Console.
+2. Added both redirect URIs (`https://markets.dew.codes/api/auth/callback/google`
+   and `http://localhost:3000/api/auth/callback/google`) and both JS origins
+   (`https://markets.dew.codes`, `http://localhost:3000`) to the new client.
+3. Replaced `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` on Vercel (old values
+   deleted, new ones created via API), then redeployed.
+4. Hit `Error 403: access_denied` — new OAuth consent screens default to
+   **Testing** publish status, which only allows explicitly-approved test users.
+   Fixed by adding `dewlearns@gmail.com` as a test user under the consent
+   screen's **Audience** tab (Google moved "Test users" here in a UI redesign;
+   it's no longer on the main OAuth consent screen page).
+5. `AUTHORISED_EMAIL` in `auth.ts` was unaffected — it was always
+   `dewlearns@gmail.com`, which is the account being logged into, not the
+   account hosting the OAuth client.
 
-2. **Google OAuth redirect URI** — add to your Google Cloud Console OAuth client:
-   - `https://markets.dew.codes/api/auth/callback/google`
-
-3. **Supabase SQL** — run the two migrations if not already done:
-   - `supabase/migrations/0001_init.sql` (all 16 tables + RLS)
-   - `supabase/migrations/0002_seed_source.sql` (run after first login, depends on `users` row)
-
-4. **Login test** — visit `markets.dew.codes`, sign in with `dewlearns@gmail.com`,
-   confirm session persists on refresh, confirm Supabase `users` table has a row.
-
----
+**Note for future reference:** since this is a private single-user app, the
+OAuth consent screen can stay in "Testing" mode indefinitely — no need to
+pursue Google's full verification process.
 
 ## Session History
 
