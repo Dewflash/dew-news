@@ -7,7 +7,7 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 4 — Ingestion Pipeline — built in full, **blocked on Kevin bootstrapping `GOOGLE_REFRESH_TOKEN`** before it can run against real Gmail (see below).
+Phase 4 — Ingestion Pipeline — built in full and committed (`a656f45`). Gmail leg (4a) verified end-to-end against a real email. AI extraction leg (4b/4c) is code-complete but **intentionally paused**: Kevin does not want to fund a separate Anthropic API key (Claude Pro doesn't cover API usage) and intends to use Gemini instead once it's implemented (Phase 5). See "Verified" and deviations below.
 
 ## Phase 4 — Ingestion Pipeline (2026-06-21)
 
@@ -36,12 +36,14 @@ Built per SPEC.md Section 7, Section 8, Section 6, and Section 15 (Phase 4). Spl
 - `npx tsc --noEmit` — clean.
 - `npm run build` — clean, all routes still compile.
 - Dev server starts with no runtime errors.
-- **Not verified: an actual end-to-end fetch against real Gmail.** `GOOGLE_REFRESH_TOKEN` in `.env.local` is currently empty — Kevin needs to:
-  1. Add `http://localhost:53682/oauth/callback` as an Authorized redirect URI on the existing Google OAuth client (Google Cloud Console → Credentials).
-  2. Run `npm run gmail:auth`, approve access as `dewlearns@gmail.com`.
-  3. Paste the printed `GOOGLE_REFRESH_TOKEN` into `.env.local` and into the Vercel project's environment variables.
-  4. Click "Fetch Now" in Settings against a real Reuters email to confirm the Phase 4 acceptance criteria end-to-end.
-- Browser click-through of the "Fetch Now" button's loading/error states has not been verified by Claude Code (no browser-driving tool available).
+- **Gmail leg (4a) verified end-to-end against real Gmail**, on 2026-06-21:
+  - `GOOGLE_REFRESH_TOKEN` bootstrapped via `npm run gmail:auth` and set in `.env.local`.
+  - Gmail API enabled on the GCP project (was disabled by default; one-time per-project setting, separate from the OAuth client itself).
+  - "Fetch Now" in Settings successfully listed and fetched a real email ("U.S. and Iran give it another try") via `searchMessages`/`getMessage`.
+  - Two stale `next dev` processes were found running on ports 3000/3001 during this testing, causing a confusing 404 on `/settings` — killed the stale one (port 3000); only port 3001 (or whatever the current `npm run dev` picks) should be used going forward.
+- **AI extraction leg (4b/4c) not yet verified end-to-end.** The only implemented provider (`ClaudeProvider`) requires `ANTHROPIC_API_KEY`, which is unset. The fetch run reached `extract()` and failed there with "Could not resolve authentication method" — confirming the Gmail leg works and isolating the remaining blocker to the AI call only.
+- **Decision: paused, not blocked.** Kevin's Claude Pro subscription does not include API credits (separate billing system from console.anthropic.com). He has chosen not to fund a Claude API key and instead wants a Gemini implementation of `AIProvider` (Phase 5 work, see "What Phase 5 needs"). Real end-to-end verification of 4b/4c (and thus full Phase 4 acceptance criteria) is deferred until either a Gemini provider exists, or Kevin decides to fund Claude API access.
+- Browser click-through of the "Fetch Now" button's loading/error states has been informally verified live (button enables/disables, errors surface inline) during this session's debugging.
 
 ### Deviations / notes
 - **`min_significance` and `active_categories` settings are applied at save time**, not specified explicitly in Section 7/8 — interpreted as: items below `min_significance` are dropped before saving (so they never reach the DB at all, rather than being saved and hidden by feed filters). `active_categories` is not yet enforced (no spec text on how it should gate extraction/save) — flagging as an open question rather than guessing further.
@@ -49,11 +51,12 @@ Built per SPEC.md Section 7, Section 8, Section 6, and Section 15 (Phase 4). Spl
 - `digests.email_date`/`received_at` parsing assumes the `Date` header and `internalDate` are both present and parseable; Section 8.2's date-normalisation fallback (event date → email send date in SGT) is applied inside the extraction prompt's own date inference, not re-derived here.
 
 ### What Phase 5 needs
+- **Gemini implementation of `AIProvider` — prioritise this first.** Kevin wants Gemini (not Claude) as his primary provider going forward to avoid paying for separate Anthropic API credits on top of Claude Pro. `getAIProvider()` in `lib/ai/provider.ts` currently only implements `"claude"`; add a `GeminiProvider` and wire it in before/instead of OpenAI.
 - RAG context building (`extract()`'s `ragContext` param already exists on the interface, unused so far).
 - Conflict/correlation detection passes (`ClaudeProvider.detectConflicts`/`detectCorrelations` currently throw on purpose).
 - Watchlist dynamic score recalculation.
 - Vercel cron + `/api/cron/fetch` (the Section 14.1 cron secret endpoint) — `runFetch("cron")` already supports this trigger type, just unwired.
-- Gemini/OpenAI provider implementations behind `getAIProvider()`.
+- OpenAI provider implementation (lower priority than Gemini per above).
 
 ---
 
