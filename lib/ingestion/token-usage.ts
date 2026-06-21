@@ -11,6 +11,10 @@ const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number
   "claude-sonnet-4-6": { input: 3, output: 15 },
   "claude-opus-4-8": { input: 15, output: 75 },
   "claude-haiku-4-5": { input: 0.8, output: 4 },
+  "gemini-2.5-pro": { input: 1.25, output: 10 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gpt-4o": { input: 2.5, output: 10 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
 
 function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number | null {

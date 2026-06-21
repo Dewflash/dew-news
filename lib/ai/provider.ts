@@ -1,5 +1,7 @@
 import type { ItemSentence, ItemsRow, Sentiment, Significance } from "@/types/database";
 import { ClaudeProvider } from "@/lib/claude";
+import { GeminiProvider } from "@/lib/gemini";
+import { OpenAIProvider } from "@/lib/openai";
 
 export interface ExtractedEntity {
   name: string;
@@ -75,7 +77,11 @@ export function getAIProvider(providerName: string, model: string, temperature: 
   switch (providerName) {
     case "claude":
       return new ClaudeProvider(model, temperature);
+    case "gemini":
+      return new GeminiProvider(model, temperature);
+    case "openai":
+      return new OpenAIProvider(model, temperature);
     default:
-      throw new Error(`AI provider "${providerName}" is not implemented yet (Phase 5).`);
+      throw new Error(`AI provider "${providerName}" is not recognized.`);
   }
 }

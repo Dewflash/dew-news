@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import type {
   AICallResult,
   AIProvider,
@@ -13,21 +13,21 @@ import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
 import type { ItemsRow } from "@/types/database";
 
-/** Section 6.1/6.2 — Claude implementation of the unified AIProvider interface. */
-export class ClaudeProvider implements AIProvider {
-  private client: Anthropic;
+/** Section 6.1/6.2/15 Phase 5 task 9 — OpenAI implementation of the unified AIProvider interface. */
+export class OpenAIProvider implements AIProvider {
+  private client: OpenAI;
   private model: string;
   private temperature: number;
 
   constructor(model: string, temperature: number) {
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     this.model = model;
     this.temperature = temperature;
   }
 
   private async call(prompt: string, temperature: number, maxTokens: number) {
     return withRetry(() =>
-      this.client.messages.create({
+      this.client.chat.completions.create({
         model: this.model,
         max_tokens: maxTokens,
         temperature,
@@ -36,26 +36,19 @@ export class ClaudeProvider implements AIProvider {
     );
   }
 
-  private textOf(message: Anthropic.Message): string {
-    return message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("");
-  }
-
   async extract(newsletterBody: string, ragContext?: string): Promise<AICallResult<ExtractedItem[]>> {
     const rag: RagContext | undefined = ragContext
       ? { lookbackDays: 0, watchlistEntities: "", recentItemsSummary: ragContext }
       : undefined;
     const prompt = buildExtractionPrompt(newsletterBody, rag);
 
-    const message = await this.call(prompt, this.temperature, 4096);
-    const data = parseJsonArray(this.textOf(message)) as ExtractedItem[];
+    const response = await this.call(prompt, this.temperature, 4096);
+    const data = parseJsonArray(response.choices[0]?.message.content ?? "") as ExtractedItem[];
 
     return {
       data,
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
     };
   }
 
@@ -71,25 +64,25 @@ export class ClaudeProvider implements AIProvider {
       JSON.stringify(existingItems.map((item) => ({ id: item.id, summary: item.summary, full_context: item.full_context, date: item.date })))
     );
 
-    const message = await this.call(prompt, this.temperature, 2048);
-    const data = parseJsonArray(this.textOf(message)) as DedupResult[];
+    const response = await this.call(prompt, this.temperature, 2048);
+    const data = parseJsonArray(response.choices[0]?.message.content ?? "") as DedupResult[];
 
     return {
       data,
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
     };
   }
 
   async summarise(): Promise<AICallResult<SummaryResult>> {
-    throw new Error("ClaudeProvider.summarise is not implemented until Phase 6.");
+    throw new Error("OpenAIProvider.summarise is not implemented until Phase 6.");
   }
 
   async detectConflicts(): Promise<AICallResult<ConflictResult[]>> {
-    throw new Error("ClaudeProvider.detectConflicts is not implemented until Phase 5b.");
+    throw new Error("OpenAIProvider.detectConflicts is not implemented until Phase 5b.");
   }
 
   async detectCorrelations(): Promise<AICallResult<CorrelationResult[]>> {
-    throw new Error("ClaudeProvider.detectCorrelations is not implemented until Phase 5b.");
+    throw new Error("OpenAIProvider.detectCorrelations is not implemented until Phase 5b.");
   }
 }

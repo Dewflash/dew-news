@@ -7,7 +7,41 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 4 — Ingestion Pipeline — built in full and committed (`a656f45`). Gmail leg (4a) verified end-to-end against a real email. AI extraction leg (4b/4c) is code-complete but **intentionally paused**: Kevin does not want to fund a separate Anthropic API key (Claude Pro doesn't cover API usage) and intends to use Gemini instead once it's implemented (Phase 5). See "Verified" and deviations below.
+Phase 5a — Provider expansion — built in full (see below). Kevin split Phase 5 (Section 15) into 5a/provider expansion → 5b/RAG+conflict+correlation detection → 5c/cron automation, reordered from the spec's task numbering so the provider swap (the thing actually unblocking real testing) comes first.
+
+## Phase 5a — Provider Expansion (2026-06-21)
+
+Built per SPEC.md Section 15 Phase 5 tasks 9–10 only (Gemini/OpenAI provider implementations, live provider switching). Tasks 1–8 (cron, RAG, conflict/correlation detection, watchlist scores, nav badges) are 5b/5c — not started.
+
+- `lib/ai/utils.ts` (new) — extracted `withRetry()` (Section 17.2 backoff) and `parseJsonArray()` out of `lib/claude.ts` so all three providers share the same retry/parsing logic instead of duplicating it.
+- `lib/gemini.ts` (new) — `GeminiProvider` via the official `@google/genai` SDK (`GoogleGenAI.models.generateContent`). Implements `extract()`/`dedup()` identically to `ClaudeProvider`'s contract; `summarise()`/`detectConflicts()`/`detectCorrelations()` throw explicit "not implemented" errors (Phase 6 / Phase 5b respectively).
+- `lib/openai.ts` (new) — `OpenAIProvider` via the official `openai` SDK (`chat.completions.create`). Same shape as `GeminiProvider`.
+- `lib/ai/provider.ts` — `getAIProvider()` now handles all three provider names; the `default` case error message changed from "not implemented yet (Phase 5)" to "not recognized" since Phase 5a closes out that gap.
+- `lib/claude.ts` — refactored to import the shared helpers from `lib/ai/utils.ts` (no behavior change); its stub error messages for `detectConflicts`/`detectCorrelations` now say "Phase 5b" instead of "Phase 5" to match the new sub-phase split.
+- `lib/ingestion/token-usage.ts` — added pricing entries for `gemini-2.5-pro`/`gemini-2.5-flash`/`gpt-4o`/`gpt-4o-mini` (the models already listed in the Settings dropdown) so cost estimation works for whichever provider Kevin actually uses, not just Claude.
+- **Task 10 (live provider switching, no restart) required no new code.** `runFetch()` already reads `settings.active_provider`/`active_model`/`temperature` fresh from Supabase at the start of every run (Phase 4 design) and constructs a new provider instance each time — flipping the Settings dropdown takes effect on the very next fetch.
+- `package.json` — added `@google/genai` and `openai` as dependencies.
+
+### Verified
+- `npx tsc --noEmit` — clean.
+- `npm run build` — clean, all routes still compile.
+- **Not verified: a real Gemini or OpenAI extraction call.** `GOOGLE_AI_API_KEY` and `OPENAI_API_KEY` are both present but empty in `.env.local`. Kevin's plan is to fill in `GOOGLE_AI_API_KEY` (Gemini), switch the Settings AI Provider toggle to Gemini, and click "Fetch Now" to get the first real end-to-end Phase 4+5a verification — this directly closes out the Phase 4 acceptance criteria that's been pending since session end of Phase 4.
+
+### Deviations / notes
+- Used `@google/genai` (Google's current unified GenAI SDK, v2.x) rather than the older `@google/generative-ai` package, which is the predecessor SDK — consistent with Section 19 Rule 7 (choose the closest current alternative).
+- Reordered Phase 5's task list (5a provider swap before 5b RAG/conflict/correlation) per Kevin's explicit instruction, since he does not intend to fund Claude API access and needs a working non-Anthropic provider before 4b/4c can be exercised at all.
+
+### What Phase 5b needs
+- RAG context building (`extract()`'s `ragContext` param already exists on all three providers, still unused).
+- Conflict detection pass (Section 7.4 prompt) + correlation detection pass (Section 7.5 prompt), both currently throwing on all three providers by design.
+- Conflict/correlation records saved to DB.
+
+### What Phase 5c needs
+- Vercel cron job (`vercel.json`, Section 14.1) + secret-verified `/api/cron/fetch` endpoint — `runFetch("cron")` already supports this trigger type, just unwired.
+- Watchlist dynamic score recalculation (nightly).
+- Unacknowledged conflict/correlation badges on nav.
+
+---
 
 ## Phase 4 — Ingestion Pipeline (2026-06-21)
 
