@@ -50,7 +50,9 @@ export async function searchItems(query: string): Promise<DisplayItem[]> {
 
   const { data: rawItems, error: itemsError } = await supabase
     .from("items")
-    .select("*, item_entities(relevance, entities(id, name, ticker, type)), digests(sources(name))")
+    .select(
+      "*, item_entities(relevance, entities(id, name, ticker, type)), digests(email_subject, gmail_message_id, sources(name))"
+    )
     .in("id", itemIds)
     .order("date", { ascending: false })
     .returns<RawItemRow[]>();

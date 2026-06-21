@@ -11,10 +11,93 @@ import { buildRagContext } from "@/lib/ingestion/rag";
 import { runConflictDetection, runCorrelationDetection } from "@/lib/ingestion/intelligence";
 import { getAIProvider, type AIProvider } from "@/lib/ai/provider";
 import { ModelOutputParseError } from "@/lib/ai/utils";
+import type { RagContext } from "@/lib/prompts/extraction";
 import type { FetchRunsRow, ItemsRow, SettingsRow } from "@/types/database";
 
 function getHeader(headers: { name?: string | null; value?: string | null }[] | undefined, name: string) {
   return headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? null;
+}
+
+/**
+ * Section 7.1 steps 2-3: extracts items from one email's body, saves the
+ * eligible ones, and updates the digest row accordingly. Shared by the main
+ * fetch loop and the single-digest "Retry" action (Settings' fetch history),
+ * so a failed email can be reprocessed from its stored `raw_body` without a
+ * fresh Gmail fetch. Throws on extraction failure; per-item save failures
+ * are caught individually and logged as warnings rather than aborting.
+ */
+export async function processDigestEmail(
+  supabase: ReturnType<typeof createServiceClient>,
+  userId: string,
+  fetchRunId: string,
+  digestId: string,
+  subject: string | null,
+  emailDate: string | null,
+  body: string,
+  provider: AIProvider,
+  settings: SettingsRow,
+  ragContext: RagContext | undefined,
+  onTokens: (inputTokens: number, outputTokens: number) => void
+): Promise<ItemsRow[]> {
+  if (!body.trim()) throw new Error("Email body was empty after extraction/cleaning.");
+
+  const { data: extractedItems, inputTokens, outputTokens } = await provider.extract(body, ragContext);
+  onTokens(inputTokens, outputTokens);
+
+  await logTokenUsage(supabase, {
+    userId,
+    callType: "extraction",
+    provider: settings.active_provider,
+    model: settings.active_model,
+    inputTokens,
+    outputTokens,
+    referenceId: digestId,
+    referenceType: "digest",
+  });
+
+  const eligibleItems = extractedItems.filter((item) => item.significance >= settings.min_significance);
+  const fallbackDate = emailDate ? new Date(emailDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+  const savedItems: ItemsRow[] = [];
+  for (const item of eligibleItems) {
+    try {
+      savedItems.push(await saveExtractedItem(supabase, userId, digestId, item, fallbackDate));
+    } catch (itemErr) {
+      const itemMessage = itemErr instanceof Error ? itemErr.message : String(itemErr);
+      await writeLog(supabase, {
+        userId,
+        fetchRunId,
+        level: "warning",
+        stage: "extract",
+        message: `Skipped one item from "${subject ?? "(no subject)"}": ${itemMessage}`,
+        metadata: { digest_id: digestId, item_summary: item.summary },
+      });
+    }
+  }
+
+  const readingTimeSeconds = savedItems.reduce((sum, i) => sum + i.reading_time_seconds, 0);
+  await supabase
+    .from("digests")
+    .update({
+      processed_at: new Date().toISOString(),
+      processing_status: "success",
+      item_count: savedItems.length,
+      reading_time_seconds: readingTimeSeconds,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+    })
+    .eq("id", digestId);
+
+  await writeLog(supabase, {
+    userId,
+    fetchRunId,
+    level: "info",
+    stage: "extract",
+    message: `Extracted ${savedItems.length} item(s) from "${subject ?? "(no subject)"}".`,
+    metadata: { digest_id: digestId },
+  });
+
+  return savedItems;
 }
 
 /**
@@ -66,8 +149,32 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
 
     const gmail = getGmailClient();
     const query = buildSearchQuery(sources);
-    const messages = await searchMessages(gmail, query);
+    const allMessages = await searchMessages(gmail, query);
+
+    // Skip messages already turned into a digest (any past run, manual or
+    // cron) — without this, re-running "Fetch Now" within the same 24h
+    // search window re-processes the same emails every time.
+    let messages = allMessages;
+    if (allMessages.length > 0) {
+      const { data: alreadyProcessed } = await supabase
+        .from("digests")
+        .select("gmail_message_id")
+        .eq("user_id", userId)
+        .in("gmail_message_id", allMessages.map((m) => m.id));
+      const processedIds = new Set((alreadyProcessed ?? []).map((d) => d.gmail_message_id));
+      messages = allMessages.filter((m) => !processedIds.has(m.id));
+    }
     emailsFound = messages.length;
+
+    if (allMessages.length > messages.length) {
+      await writeLog(supabase, {
+        userId,
+        fetchRunId: fetchRun.id,
+        level: "info",
+        stage: "fetch",
+        message: `Skipped ${allMessages.length - messages.length} email(s) already processed in a previous run.`,
+      });
+    }
 
     if (messages.length === 0) {
       await writeLog(supabase, {
@@ -103,73 +210,31 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
           email_date: emailDate ? new Date(emailDate).toISOString() : null,
           received_at: message.internalDate ? new Date(Number(message.internalDate)).toISOString() : null,
           raw_body: body,
+          gmail_message_id: id,
         })
         .select("*")
         .single();
       if (digestError) throw new Error(digestError.message);
 
       try {
-        if (!body.trim()) throw new Error("Email body was empty after extraction/cleaning.");
-
-        const { data: extractedItems, inputTokens, outputTokens } = await provider.extract(body, ragContext);
-        totalInputTokens += inputTokens;
-        totalOutputTokens += outputTokens;
-
-        await logTokenUsage(supabase, {
+        const savedItems = await processDigestEmail(
+          supabase,
           userId,
-          callType: "extraction",
-          provider: settings.active_provider,
-          model: settings.active_model,
-          inputTokens,
-          outputTokens,
-          referenceId: digest.id,
-          referenceType: "digest",
-        });
-
-        const eligibleItems = extractedItems.filter((item) => item.significance >= settings.min_significance);
-        const fallbackDate = emailDate ? new Date(emailDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-
-        const savedItems: ItemsRow[] = [];
-        for (const item of eligibleItems) {
-          try {
-            savedItems.push(await saveExtractedItem(supabase, userId, digest.id, item, fallbackDate));
-          } catch (itemErr) {
-            const itemMessage = itemErr instanceof Error ? itemErr.message : String(itemErr);
-            await writeLog(supabase, {
-              userId,
-              fetchRunId: fetchRun.id,
-              level: "warning",
-              stage: "extract",
-              message: `Skipped one item from "${subject ?? "(no subject)"}": ${itemMessage}`,
-              metadata: { digest_id: digest.id, item_summary: item.summary },
-            });
+          fetchRun.id,
+          digest.id,
+          subject,
+          emailDate,
+          body,
+          provider,
+          settings,
+          ragContext,
+          (inputTokens, outputTokens) => {
+            totalInputTokens += inputTokens;
+            totalOutputTokens += outputTokens;
           }
-        }
+        );
         itemsExtracted += savedItems.length;
         allSavedItems.push(...savedItems);
-
-        const readingTimeSeconds = savedItems.reduce((sum, i) => sum + i.reading_time_seconds, 0);
-        await supabase
-          .from("digests")
-          .update({
-            processed_at: new Date().toISOString(),
-            processing_status: "success",
-            item_count: savedItems.length,
-            reading_time_seconds: readingTimeSeconds,
-            input_tokens: inputTokens,
-            output_tokens: outputTokens,
-          })
-          .eq("id", digest.id);
-
-        await writeLog(supabase, {
-          userId,
-          fetchRunId: fetchRun.id,
-          level: "info",
-          stage: "extract",
-          message: `Extracted ${savedItems.length} item(s) from "${subject ?? "(no subject)"}".`,
-          metadata: { digest_id: digest.id },
-        });
-
         emailsProcessed++;
       } catch (err) {
         emailsFailed++;

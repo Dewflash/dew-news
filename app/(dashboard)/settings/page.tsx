@@ -33,6 +33,27 @@ export default async function SettingsPage() {
     .limit(1)
     .maybeSingle();
 
+  const { data: recentFetchRunRows } = await supabase
+    .from("fetch_runs")
+    .select("*")
+    .order("started_at", { ascending: false })
+    .limit(10);
+
+  const recentFetchRunIds = (recentFetchRunRows ?? []).map((r) => r.id);
+  const { data: recentDigests } =
+    recentFetchRunIds.length > 0
+      ? await supabase
+          .from("digests")
+          .select("id, fetch_run_id, email_subject, processing_status, item_count, reprocessed")
+          .in("fetch_run_id", recentFetchRunIds)
+          .order("created_at", { ascending: true })
+      : { data: [] };
+
+  const recentFetchRuns = (recentFetchRunRows ?? []).map((run) => ({
+    ...run,
+    digests: (recentDigests ?? []).filter((d) => d.fetch_run_id === run.id),
+  }));
+
   const { data: processingLog } = await supabase
     .from("processing_log")
     .select("*")
@@ -72,6 +93,7 @@ export default async function SettingsPage() {
         settings={settings}
         sources={sources ?? []}
         lastFetchRun={lastFetchRun ?? null}
+        recentFetchRuns={recentFetchRuns ?? []}
         processingLog={processingLog ?? []}
         tokenUsage={{ totalTokens, totalCostUsd, byProvider }}
         dbStats={{

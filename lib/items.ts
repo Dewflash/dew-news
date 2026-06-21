@@ -11,6 +11,8 @@ export interface DisplayItemEntity {
 export interface DisplayItem extends ItemsRow {
   entities: DisplayItemEntity[];
   sourceName: string | null;
+  emailSubject: string | null;
+  gmailUrl: string | null;
   hasConflict: boolean;
   conflictSummary: string | null;
   hasCorrelation: boolean;
@@ -25,7 +27,16 @@ export interface RawItemRow extends ItemsRow {
     relevance: EntityRelevance;
     entities: { id: string; name: string; ticker: string | null; type: EntityType } | null;
   }>;
-  digests: { sources: { name: string } | null } | null;
+  digests: {
+    email_subject: string | null;
+    gmail_message_id: string | null;
+    sources: { name: string } | null;
+  } | null;
+}
+
+/** Section 8.1: deep link back into Gmail for the email an item was extracted from. */
+function buildGmailUrl(messageId: string | null): string | null {
+  return messageId ? `https://mail.google.com/mail/u/0/#all/${messageId}` : null;
 }
 
 export function buildDisplayItems(
@@ -74,6 +85,8 @@ export function buildDisplayItems(
       ...rest,
       entities,
       sourceName: digests?.sources?.name ?? null,
+      emailSubject: digests?.email_subject ?? null,
+      gmailUrl: buildGmailUrl(digests?.gmail_message_id ?? null),
       hasConflict: conflictByItemId.has(row.id),
       conflictSummary: conflictByItemId.get(row.id) ?? null,
       hasCorrelation: correlationByItemId.has(row.id),

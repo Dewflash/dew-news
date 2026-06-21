@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { ALL_CATEGORIES } from "@/lib/categories";
 import { cronToHuman } from "@/lib/format";
 import { addSource, deleteSource, toggleSource, updateSettings } from "@/lib/actions/settings";
-import { triggerFetch } from "@/lib/actions/fetch";
+import { triggerFetch, reprocessDigest } from "@/lib/actions/fetch";
 import type {
   ActiveProvider,
   CardDensity,
@@ -16,6 +16,19 @@ import type {
   SettingsRow,
   SourcesRow,
 } from "@/types/database";
+
+interface DigestSummary {
+  id: string;
+  fetch_run_id: string;
+  email_subject: string | null;
+  processing_status: string;
+  item_count: number;
+  reprocessed: boolean;
+}
+
+interface FetchRunWithDigests extends FetchRunsRow {
+  digests: DigestSummary[];
+}
 
 const PROVIDER_MODELS: Record<ActiveProvider, string[]> = {
   claude: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
@@ -405,6 +418,79 @@ function DigestsSection({ settings }: { settings: SettingsRow }) {
   );
 }
 
+function FetchHistorySection({ recentFetchRuns }: { recentFetchRuns: FetchRunWithDigests[] }) {
+  const [, startTransition] = useTransition();
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  function handleRetry(digestId: string) {
+    setRetryError(null);
+    setRetryingId(digestId);
+    startTransition(async () => {
+      try {
+        await reprocessDigest(digestId);
+      } catch (err) {
+        setRetryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRetryingId(null);
+      }
+    });
+  }
+
+  const statusColor: Record<string, string> = {
+    success: "text-bullish",
+    failed: "text-bearish",
+    pending: "text-gray-500",
+    skipped: "text-gray-500",
+  };
+
+  return (
+    <Section title="Fetch History">
+      {retryError && <p className="text-xs text-bearish">Retry failed: {retryError}</p>}
+      {recentFetchRuns.length === 0 ? (
+        <p className="text-sm text-gray-500">No fetch runs yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {recentFetchRuns.map((run) => (
+            <div key={run.id} className="rounded border border-white/5 bg-white/5 p-2">
+              <p className="text-xs text-gray-400">
+                {new Date(run.started_at).toLocaleString("en-SG")} · {run.triggered_by} ·{" "}
+                <span className={statusColor[run.status] ?? "text-gray-400"}>{run.status}</span>
+              </p>
+              {run.digests.length === 0 ? (
+                <p className="mt-1 text-xs text-gray-500">No emails matched this run.</p>
+              ) : (
+                <ul className="mt-1 space-y-1">
+                  {run.digests.map((d) => (
+                    <li key={d.id} className="flex items-center gap-2 text-xs">
+                      <span className={statusColor[d.processing_status] ?? "text-gray-400"}>
+                        {d.processing_status}
+                      </span>
+                      <span className="flex-1 truncate text-gray-300">{d.email_subject ?? "(no subject)"}</span>
+                      <span className="text-gray-500">{d.item_count} item(s)</span>
+                      {d.reprocessed && <span className="text-gray-500">(retried)</span>}
+                      {d.processing_status === "failed" && (
+                        <button
+                          type="button"
+                          disabled={retryingId === d.id}
+                          onClick={() => handleRetry(d.id)}
+                          className="rounded bg-white/10 px-2 py-0.5 text-white hover:bg-white/20 disabled:opacity-50"
+                        >
+                          {retryingId === d.id ? "Retrying…" : "Retry"}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function SystemSection({
   settings,
   lastFetchRun,
@@ -529,6 +615,7 @@ export function SettingsClient(props: {
   settings: SettingsRow;
   sources: SourcesRow[];
   lastFetchRun: FetchRunsRow | null;
+  recentFetchRuns: FetchRunWithDigests[];
   processingLog: ProcessingLogRow[];
   tokenUsage: { totalTokens: number; totalCostUsd: number; byProvider: Record<string, number> };
   dbStats: { totalItems: number; dateRangeStart: string | null; dateRangeEnd: string | null; totalAnnotations: number; totalEntities: number };
@@ -547,6 +634,7 @@ export function SettingsClient(props: {
         tokenUsage={props.tokenUsage}
         dbStats={props.dbStats}
       />
+      <FetchHistorySection recentFetchRuns={props.recentFetchRuns} />
     </div>
   );
 }

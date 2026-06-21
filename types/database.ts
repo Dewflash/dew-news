@@ -128,6 +128,7 @@ export type DigestsRow = {
   email_date: string | null;
   received_at: string | null;
   raw_body: string;
+  gmail_message_id: string | null;
   processed_at: string | null;
   processing_status: ProcessingStatus;
   item_count: number;

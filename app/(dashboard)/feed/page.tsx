@@ -11,7 +11,9 @@ export default async function FeedPage() {
 
   const { data: rawItems, error: itemsError } = await supabase
     .from("items")
-    .select("*, item_entities(relevance, entities(id, name, ticker, type)), digests(sources(name))")
+    .select(
+      "*, item_entities(relevance, entities(id, name, ticker, type)), digests(email_subject, gmail_message_id, sources(name))"
+    )
     .order("date", { ascending: false })
     .returns<RawItemRow[]>();
   if (itemsError) throw new Error(itemsError.message);

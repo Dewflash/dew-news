@@ -228,10 +228,14 @@ export function ItemCard({
 
   return (
     <div className="rounded-lg border border-white/10 bg-card p-4">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full flex-col gap-2 text-left"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") setExpanded((v) => !v);
+        }}
+        className="flex w-full cursor-pointer flex-col gap-2 text-left"
       >
         <div className="flex items-center gap-2">
           <SignificanceDot significance={item.significance} />
@@ -279,7 +283,26 @@ export function ItemCard({
           <span>{formatDate(item.date)}</span>
           {showReadingTime && <span>{formatReadingTime(item.reading_time_seconds)}</span>}
         </div>
-      </button>
+
+        {item.emailSubject && (
+          <p className="text-xs text-gray-500">
+            From:{" "}
+            {item.gmailUrl ? (
+              <a
+                href={item.gmailUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="hover:text-accent hover:underline"
+              >
+                {item.emailSubject}
+              </a>
+            ) : (
+              item.emailSubject
+            )}
+          </p>
+        )}
+      </div>
 
       {expanded && (
         <div className="mt-3 border-t border-white/10 pt-3">

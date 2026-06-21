@@ -9,6 +9,25 @@
 ## Current Phase
 Phase 5b — RAG context + conflict/correlation detection — built and now verified end-to-end against real Gmail + Gemini (see "Phase 4/5a/5b End-to-End Verification" below). 5c (cron automation, watchlist dynamic scores, nav badges) not started.
 
+## Fetch History + Duplicate-Email Prevention (2026-06-21)
+
+Built per Kevin's explicit request, ahead of/outside the original phase plan (flagged since it touches Section 18's "Future Considerations" alert-system note, but Kevin asked directly for an in-app version of it):
+
+- **`digests.gmail_message_id`** (new nullable column, migration `0003_digest_message_id.sql`) + a unique index on `(user_id, gmail_message_id)` where not null. **Applied to the live Supabase DB** (Kevin ran it via the SQL editor).
+- `lib/ingestion/run.ts` — `runFetch()` now filters Gmail search results against already-processed `gmail_message_id`s before processing, so re-running "Fetch Now" within the same rolling 24h search window (or an overlapping cron run) never re-processes the same email twice. Logs how many were skipped.
+- `lib/ingestion/run.ts` — extracted the per-email extract/save/digest-update logic into an exported `processDigestEmail()`, shared between the main fetch loop and the new retry action below (previously inlined only in the loop).
+- `lib/actions/fetch.ts` — new `reprocessDigest(digestId)` server action: reprocesses one previously **failed** digest from its already-stored `raw_body` (no fresh Gmail fetch), via the shared `processDigestEmail()`. Sets `digests.reprocessed`/`reprocessed_at` (pre-existing, previously-unused columns) on success. Scope note: runs extraction + save only — dedup/conflict/correlation detection for the reprocessed item is deferred to the next full fetch run, not re-run inline, to keep the retry action simple and fast.
+- `app/(dashboard)/settings/page.tsx` + `components/settings/SettingsClient.tsx` — new "Fetch History" section: lists the last 10 fetch runs with each run's per-email subject + status (success/failed/skipped) + item count, and a "Retry" button on any failed email. This is the in-app alternative Kevin chose over an external email/Resend notification.
+- **Backfill**: the migration is additive and can't retroactively populate `gmail_message_id` on digests created before it existed. One-off backfill performed for the single pre-migration digest (real Reuters "Weekend Briefing" email, subject "U.S. and Iran give it another try") — matched to its real Gmail message via a timestamp-scoped search (exact `received_at` ± 2h, since the email's `Date` header didn't line up with a wide `after:` epoch query) and updated directly. The 3 leftover **failed** duplicate digests from this morning's pre-fix debugging (0 items each) were left as-is in Fetch History at Kevin's request, kept as visible history rather than deleted.
+- **Feed traceability**: each item card (Feed + Search) now shows a "From: \<email subject\>" line, sourced from `digests.email_subject`. When `gmail_message_id` is present, the subject is a clickable link (`https://mail.google.com/mail/u/0/#all/<id>`) opening that exact email directly in Gmail. Items from digests without a stored message id (anything pre-migration and not backfilled) show the subject as plain text. `lib/items.ts` (`RawItemRow`/`DisplayItem`), `app/(dashboard)/feed/page.tsx`, `lib/search.ts`, `components/feed/ItemCard.tsx`.
+- `components/feed/ItemCard.tsx` — the card's clickable toggle area was changed from a `<button>` to a `<div role="button" tabIndex={0}>` (with matching `onKeyDown`) so the new Gmail link (an `<a>`) can sit inside it without invalid "interactive content nested in a button" HTML and the layout/spacing glitch that caused.
+
+### Verified
+- `npx tsc --noEmit` / `npm run build` — clean.
+- Dev server restarted clean, `/settings` and `/feed` compile and respond (redirect to `/login` when unauthenticated, as expected).
+- Migration applied live; backfill update confirmed via direct query (digest now carries the real `gmail_message_id`).
+- **Not yet verified**: an actual duplicate-prevention run (two consecutive "Fetch Now" calls confirming the second skips the already-processed email) and a real failed-email retry via the new button — both pending Kevin's next live test.
+
 ## Phase 4/5a/5b End-to-End Verification + Bug Fixes (2026-06-21)
 
 First real end-to-end run of the full pipeline (Gmail → Gemini extraction → save → dedup → conflict/correlation detection), using `gemini-2.5-flash` (Kevin's chosen primary provider, free tier). Surfaced and fixed several real bugs:
