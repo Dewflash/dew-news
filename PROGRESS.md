@@ -7,7 +7,33 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5 (Section 15) is fully done. Phase 6 ("Digests & Polish") is **complete** — all three sub-phases (6a digest generation, 6b settings stats/chart, 6c mobile/loading/optimistic UI/error states) are done.
+Phase 5 (Section 15) and Phase 6 ("Digests & Polish") are complete — this was the full SPEC.md scope. **Macro Indicators Dashboard** (a separate, out-of-spec feature requested directly by Kevin — see `dashboard.md` for the full design) is built but **not yet live**: code is complete and typechecks/builds clean, but three manual setup steps are still needed before it works (see below).
+
+## Macro Indicators Dashboard (2026-06-22)
+
+New page at `/indicators`, design fully resolved in `dashboard.md` before any code was written (schema, per-indicator direction logic verified against official methodologies where they exist, data sources, nav/mobile/error decisions).
+
+**Built:**
+- `supabase/migrations/0004_macro_indicators.sql` — `macro_indicators` (static catalog) + `macro_indicator_readings` (time series) tables, RLS policies. **Not yet applied to the live DB** — same as every prior migration, this needs to be run manually via the Supabase SQL editor (no direct Postgres connection available to this session, only the REST API).
+- `types/database.ts` — `MacroIndicatorsRow`/`MacroIndicatorReadingsRow` + `Database` registration.
+- `scripts/seed-macro-indicators.ts` (`npm run seed:macro`) — seeds the 19 indicator catalog rows from dashboard.md. Idempotent. **Must be run after the migration**, before the page will show anything.
+- `lib/ingestion/macro/fred.ts` — FRED observations API client. **Requires a `FRED_API_KEY` env var that does not exist yet in this app** (`.env.local` or Vercel) — sign up free at https://fred.stlouisfed.org/docs/api/api_key.html. Every FRED-backed indicator will show "Data unavailable" until this is added.
+- `lib/ingestion/macro/press-release.ts` + `lib/prompts/macro-headline.ts` + `AIProvider.extractMacroHeadline()` (added to the interface, implemented in all three providers) — for the 5 indicators with no structured API (ISM Mfg/Services PMI, Conference Board LEI/Consumer Confidence, UMich Sentiment), fetches the org's public press-release/listing page and asks the user's configured AI provider to find the latest headline figure in free text, rather than a brittle CSS-selector scraper.
+- `lib/ingestion/macro/direction.ts` — implements the direction-logic rule for all 19 indicators per the sourced/judgment-call audit in dashboard.md, dispatched by `direction_rule_key`. Two approximations made during implementation (beyond what dashboard.md already flagged): Conference Board LEI's "3Ds" rule only checks the depth leg (6-month rate < -4.3%) — the diffusion leg needs component-level data not available from the free headline-only press release; CPI's "supercore" uses Core CPI (`CPILFESL`) as a proxy since no single FRED series matches the exact "core services ex-shelter" concept.
+- `lib/ingestion/macro/run.ts` — `fetchAllMacroIndicators()` (one fetch+direction cycle per indicator, each wrapped so one failure can't take down the rest) and `backfillFredIndicators()` (pulls ~24 historical observations per FRED-backed indicator on first run, so rolling-window rules like Sahm Rule or the 4-week claims MA aren't blank from day one — the 6 non-FRED indicators, including BDI, have no historical backfill path and accumulate history naturally over time instead).
+- Wired into the existing daily cron (`app/api/cron/fetch/route.ts`) — same Hobby-tier single-cron constraint as digests, piggybacks on the one daily invocation. Also exposed as manual actions (`lib/actions/macro.ts`: `triggerMacroFetch`, `triggerMacroBackfill`) from buttons on the `/indicators` page itself.
+- UI: `components/ui/StatDirectionBadge.tsx` (deliberately not named "SentimentBadge" — that name already means something different elsewhere in this app), `components/indicators/IndicatorRow.tsx` (click to expand: threshold rule, lead/lag window, analyst note, source link), `components/indicators/IndicatorsClient.tsx` (grouped by cycle type), `app/(dashboard)/indicators/page.tsx` + `loading.tsx`. Nav entry added to the desktop top nav only, per dashboard.md decision 2 — mobile bottom bar stays at its existing 5 slots; a link to `/indicators` was added inside Settings (mobile-only, `sm:hidden`) instead.
+
+**Known gaps, flagged honestly rather than papered over:**
+- **Baltic Dry Index has no free source at all**, discovered during this build (not part of the original 5-indicator source research). The Baltic Exchange's own API is subscription-only, and unlike the other non-FRED indicators there's no free press release with the headline number either. This row will show "Data unavailable" indefinitely unless a paid source is added later.
+- **`FRED_API_KEY` is not yet provisioned** — every FRED-backed indicator (14 of 19) will show "Data unavailable" until Kevin signs up for the free key and adds it to `.env.local` and Vercel's env vars.
+- Cron's `maxDuration = 60` (`app/api/cron/fetch/route.ts`) could in theory truncate mid-loop with 19 sequential indicator fetches (5 of which involve an AI call) on a slow day — non-fatal (each indicator commits its own row before moving to the next), just means a stale indicator catches up on a later day rather than that exact run.
+- UMich Sentiment's "5yr inflation expectation > 3%" override (dashboard.md's direction rule) isn't wired in — `direction.ts` currently only checks simple MoM sign for this indicator, same as Consumer Confidence.
+
+**Verified:**
+- `npx tsc --noEmit` clean.
+- `npm run build` clean — the one error printed during the build (`Could not find the table 'public.macro_indicators'`) is Next.js's prerender step correctly hitting the live DB before the migration has been applied; expected, not a code bug.
+- **Not yet tested against real data** — blocked on the three manual steps above (run migration, run `npm run seed:macro`, add `FRED_API_KEY`). Once those are done, `/indicators` will need an actual visual check in the browser, which I cannot do myself in this session.
 
 ## Phase 6c — Mobile Pass, Loading Skeletons, Optimistic UI, Error States (2026-06-21)
 

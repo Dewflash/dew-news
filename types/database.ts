@@ -441,6 +441,56 @@ export type SettingsInsert = Insertable<SettingsRow, "user_id">;
 export type SettingsUpdate = Partial<SettingsRow>;
 
 // ---------------------------------------------------------------------------
+// macro_indicators / macro_indicator_readings (see dashboard.md)
+// ---------------------------------------------------------------------------
+export type CycleType = "leading" | "coincident" | "lagging";
+export type Direction = "up" | "down";
+
+export type MacroIndicatorsRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  cycle_type: CycleType;
+  frequency: string;
+  source_name: string;
+  source_url: string;
+  fred_series_id: string | null;
+  press_release_url: string | null;
+  lead_lag_months: string | null;
+  threshold_rule: string;
+  direction_rule_key: string;
+  analyst_note: string | null;
+  sub_indices: string[];
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+export type MacroIndicatorsInsert = Insertable<
+  MacroIndicatorsRow,
+  "user_id" | "name" | "cycle_type" | "frequency" | "source_name" | "source_url" | "threshold_rule" | "direction_rule_key" | "sort_order"
+>;
+export type MacroIndicatorsUpdate = Partial<MacroIndicatorsRow>;
+
+export type MacroIndicatorReadingsRow = {
+  id: string;
+  indicator_id: string;
+  user_id: string;
+  period_date: string;
+  actual_value: number | null;
+  previous_value: number | null;
+  released_at: string | null;
+  direction: Direction | null;
+  fetch_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type MacroIndicatorReadingsInsert = Insertable<
+  MacroIndicatorReadingsRow,
+  "indicator_id" | "user_id" | "period_date"
+>;
+export type MacroIndicatorReadingsUpdate = Partial<MacroIndicatorReadingsRow>;
+
+// ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 type Table<Row, Insert, Update> = {
@@ -473,6 +523,12 @@ export type Database = {
       token_usage: Table<TokenUsageRow, TokenUsageInsert, TokenUsageUpdate>;
       processing_log: Table<ProcessingLogRow, ProcessingLogInsert, ProcessingLogUpdate>;
       settings: Table<SettingsRow, SettingsInsert, SettingsUpdate>;
+      macro_indicators: Table<MacroIndicatorsRow, MacroIndicatorsInsert, MacroIndicatorsUpdate>;
+      macro_indicator_readings: Table<
+        MacroIndicatorReadingsRow,
+        MacroIndicatorReadingsInsert,
+        MacroIndicatorReadingsUpdate
+      >;
     };
     Views: { [_ in never]: never };
     Functions: { [_ in never]: never };

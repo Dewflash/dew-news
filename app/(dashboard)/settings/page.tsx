@@ -106,6 +106,12 @@ export default async function SettingsPage() {
   return (
     <div>
       <h1 className="mb-4 text-2xl font-semibold text-white">Settings</h1>
+      <a
+        href="/indicators"
+        className="mb-4 block rounded border border-white/10 bg-card px-3 py-2 text-sm text-gray-300 hover:bg-white/5 sm:hidden"
+      >
+        📊 Macro Indicators — not in the mobile tab bar, link here instead →
+      </a>
       <SettingsClient
         settings={settings}
         sources={sources ?? []}

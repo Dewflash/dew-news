@@ -6,10 +6,12 @@ import type {
   CorrelationResult,
   DedupResult,
   ExtractedItem,
+  MacroHeadlineResult,
   SummaryResult,
 } from "@/lib/ai/provider";
 import {
   parseJsonArray,
+  parseJsonObject,
   parseNarrativeWithJsonFooter,
   serializeItemForPrompt,
   serializeItemForSummaryPrompt,
@@ -19,6 +21,7 @@ import { buildConflictPrompt } from "@/lib/prompts/conflict";
 import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
+import { buildMacroHeadlinePrompt } from "@/lib/prompts/macro-headline";
 import { buildSummaryPrompt } from "@/lib/prompts/summary";
 import type { ItemsRow, Sentiment } from "@/types/database";
 
@@ -149,6 +152,26 @@ export class ClaudeProvider implements AIProvider {
 
     return {
       data,
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    };
+  }
+
+  async extractMacroHeadline(
+    indicatorName: string,
+    instruction: string,
+    pageText: string
+  ): Promise<AICallResult<MacroHeadlineResult>> {
+    const prompt = buildMacroHeadlinePrompt(indicatorName, instruction, pageText);
+    const message = await this.call(prompt, 0, 512);
+    const json = parseJsonObject(this.textOf(message));
+
+    return {
+      data: {
+        value: typeof json.value === "number" ? json.value : null,
+        periodDate: typeof json.period_date === "string" ? json.period_date : null,
+        found: json.found === true,
+      },
       inputTokens: message.usage.input_tokens,
       outputTokens: message.usage.output_tokens,
     };

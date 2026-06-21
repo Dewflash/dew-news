@@ -4,6 +4,8 @@ import { getUserId } from "@/lib/user";
 import { writeLog } from "@/lib/ingestion/log";
 import { runFetch } from "@/lib/ingestion/run";
 import { maybeGenerateDigests } from "@/lib/ingestion/digest";
+import { fetchAllMacroIndicators } from "@/lib/ingestion/macro/run";
+import { getAIProvider } from "@/lib/ai/provider";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -76,6 +78,18 @@ export async function GET(request: NextRequest) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await writeLog(supabase, { userId, level: "error", stage: "summarise", message: `Digest generation check failed: ${message}` });
+    }
+
+    // Macro Indicators Dashboard (dashboard.md) — same Hobby-tier single-cron
+    // constraint as digests, piggybacks on this invocation. Each indicator's
+    // own fetch already catches its own errors (see fetchAllMacroIndicators),
+    // so a slow/failing indicator can't take down the rest of this route.
+    try {
+      const provider = getAIProvider(settings.active_provider, settings.active_model, settings.temperature);
+      await fetchAllMacroIndicators(supabase, userId, provider);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await writeLog(supabase, { userId, level: "error", stage: "system", message: `Macro indicator fetch check failed: ${message}` });
     }
   }
 

@@ -112,6 +112,19 @@ export function parseJsonArray(text: string): unknown[] {
   return parsed;
 }
 
+export function parseJsonObject(text: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJson(text));
+  } catch {
+    throw new ModelOutputParseError("Model returned invalid JSON.", text);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ModelOutputParseError("Model returned valid JSON but it was not an object.", text);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 /** Shared item shape passed into dedup/conflict/correlation prompts — just enough for the model to compare items. */
 export function serializeItemForPrompt(item: ItemsRow) {
   return {

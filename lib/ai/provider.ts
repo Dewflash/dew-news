@@ -53,6 +53,12 @@ export interface SummaryResult {
   watchlist_mentions: Record<string, number>;
 }
 
+export interface MacroHeadlineResult {
+  value: number | null;
+  periodDate: string | null;
+  found: boolean;
+}
+
 export interface AICallResult<T> {
   data: T;
   inputTokens: number;
@@ -70,6 +76,8 @@ export interface AIProvider {
   summarise(items: ItemsRow[], type: "weekly" | "monthly"): Promise<AICallResult<SummaryResult>>;
   detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>>;
   detectCorrelations(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<CorrelationResult[]>>;
+  /** Macro Indicators Dashboard (dashboard.md): extracts one headline figure from a press-release page's text, for the indicators with no structured API. */
+  extractMacroHeadline(indicatorName: string, instruction: string, pageText: string): Promise<AICallResult<MacroHeadlineResult>>;
 }
 
 /** Section 6.3: provider/model/temperature are read from settings at the start of each fetch run. */

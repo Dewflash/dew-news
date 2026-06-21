@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx --env-file=.env.local scripts/seed.ts",
+    "seed:macro": "tsx --env-file=.env.local scripts/seed-macro-indicators.ts",
     "gmail:auth": "tsx --env-file=.env.local scripts/get-gmail-refresh-token.ts"
   },
   "dependencies": {

@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { href: "/conflicts", label: "Conflicts" },
   { href: "/correlations", label: "Correlations" },
   { href: "/search", label: "Search" },
+  { href: "/indicators", label: "Indicators" },
   { href: "/settings", label: "Settings" },
 ];
 

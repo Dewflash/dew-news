@@ -6,11 +6,13 @@ import type {
   CorrelationResult,
   DedupResult,
   ExtractedItem,
+  MacroHeadlineResult,
   SummaryResult,
 } from "@/lib/ai/provider";
 import {
   createRateLimiter,
   parseJsonArray,
+  parseJsonObject,
   parseNarrativeWithJsonFooter,
   serializeItemForPrompt,
   serializeItemForSummaryPrompt,
@@ -20,6 +22,7 @@ import { buildConflictPrompt } from "@/lib/prompts/conflict";
 import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
+import { buildMacroHeadlinePrompt } from "@/lib/prompts/macro-headline";
 import { buildSummaryPrompt } from "@/lib/prompts/summary";
 import type { ItemsRow, Sentiment } from "@/types/database";
 
@@ -192,6 +195,26 @@ export class GeminiProvider implements AIProvider {
 
     return {
       data,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+    };
+  }
+
+  async extractMacroHeadline(
+    indicatorName: string,
+    instruction: string,
+    pageText: string
+  ): Promise<AICallResult<MacroHeadlineResult>> {
+    const prompt = buildMacroHeadlinePrompt(indicatorName, instruction, pageText);
+    const response = await this.call(prompt, 0, 1024);
+    const json = parseJsonObject(response.text ?? "");
+
+    return {
+      data: {
+        value: typeof json.value === "number" ? json.value : null,
+        periodDate: typeof json.period_date === "string" ? json.period_date : null,
+        found: json.found === true,
+      },
       inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
       outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
     };
