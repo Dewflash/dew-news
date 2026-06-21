@@ -42,6 +42,19 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
     message: `Fetch run started (triggered_by=${triggeredBy}).`,
   });
 
+  // Tracked outside the try block so the outer catch can report real partial
+  // progress instead of resetting to 0 if something fails later in the run
+  // (e.g. the dedup/conflict/correlation stages) after emails were already
+  // successfully processed and saved.
+  let emailsFound = 0;
+  let emailsProcessed = 0;
+  let emailsFailed = 0;
+  let itemsExtracted = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let providerUsed: string | null = null;
+  let modelUsed: string | null = null;
+
   try {
     const { data: settings } = await supabase.from("settings").select("*").eq("user_id", userId).single();
     if (!settings) throw new Error("No settings row found for user.");
@@ -54,6 +67,7 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
     const gmail = getGmailClient();
     const query = buildSearchQuery(sources);
     const messages = await searchMessages(gmail, query);
+    emailsFound = messages.length;
 
     if (messages.length === 0) {
       await writeLog(supabase, {
@@ -67,13 +81,10 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
     }
 
     const provider = getAIProvider(settings.active_provider, settings.active_model, settings.temperature);
+    providerUsed = settings.active_provider;
+    modelUsed = settings.active_model;
     const ragContext = await buildRagContext(supabase, userId, settings);
 
-    let emailsProcessed = 0;
-    let emailsFailed = 0;
-    let itemsExtracted = 0;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
     const allSavedItems: ItemsRow[] = [];
 
     for (const { id } of messages) {
@@ -253,8 +264,23 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
       level: "error",
       stage: "fetch",
       message: `Fetch run failed: ${message}`,
+      metadata: err instanceof ModelOutputParseError ? { raw_model_output: err.rawText } : {},
     });
-    return await finishRun(supabase, fetchRun.id, userId, { status: "failed", error_message: message });
+    // Report whatever was actually completed before the failure — items may
+    // already be saved to the DB even though the run didn't finish, and the
+    // status/counts here should reflect that rather than silently zeroing it.
+    return await finishRun(supabase, fetchRun.id, userId, {
+      status: emailsProcessed > 0 ? "partial" : "failed",
+      error_message: message,
+      emails_found: emailsFound,
+      emails_processed: emailsProcessed,
+      items_extracted: itemsExtracted,
+      provider_used: providerUsed,
+      model_used: modelUsed,
+      total_input_tokens: totalInputTokens,
+      total_output_tokens: totalOutputTokens,
+      estimated_cost_usd: modelUsed ? estimateCostUsd(modelUsed, totalInputTokens, totalOutputTokens) ?? 0 : 0,
+    });
   }
 }
 
@@ -269,13 +295,17 @@ async function runDedupPass(
 ): Promise<{ count: number; inputTokens: number; outputTokens: number; duplicateIds: Set<string> }> {
   if (newItems.length === 0) return { count: 0, inputTokens: 0, outputTokens: 0, duplicateIds: new Set() };
 
-  const today = new Date().toISOString().slice(0, 10);
+  // "Existing items from today" (Section 7.3) means items already processed today,
+  // not items whose news-event date happens to be today — `items.date` is the event
+  // date (can be backdated per Section 7.2) and isn't a reliable "today" filter.
+  const startOfToday = new Date();
+  startOfToday.setUTCHours(0, 0, 0, 0);
   const newItemIds = newItems.map((i) => i.id);
   const { data: existingItems } = await supabase
     .from("items")
     .select("*")
     .eq("user_id", userId)
-    .eq("date", today)
+    .gte("created_at", startOfToday.toISOString())
     .eq("is_duplicate", false)
     .not("id", "in", `(${newItemIds.join(",")})`);
 

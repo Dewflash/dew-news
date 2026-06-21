@@ -21,9 +21,13 @@ import type { ItemsRow } from "@/types/database";
  * correlation calls can exceed it even with plenty of tokens left. Module-
  * level so it's shared across every GeminiProvider instance in this
  * process (a new instance is created per fetch run, but the limit is
- * per-API-key, not per-run). Starts at 10 RPM and widens on actual 429s.
+ * per-API-key, not per-run). Confirmed via a real 429 response: the
+ * gemini-2.5-flash free tier is capped at 5 requests/minute
+ * ("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", quotaValue: "5")
+ * — 12s minimum spacing, plus a small buffer. Still widens further on any
+ * 429 that does occur (e.g. other models/tiers with different caps).
  */
-const geminiRateLimiter = createRateLimiter(6_000);
+const geminiRateLimiter = createRateLimiter(13_000);
 
 /** Section 6.1/6.2/15 Phase 5 task 9 — Gemini implementation of the unified AIProvider interface. */
 export class GeminiProvider implements AIProvider {
