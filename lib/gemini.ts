@@ -8,12 +8,20 @@ import type {
   ExtractedItem,
   SummaryResult,
 } from "@/lib/ai/provider";
-import { createRateLimiter, parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
+import {
+  createRateLimiter,
+  parseJsonArray,
+  parseNarrativeWithJsonFooter,
+  serializeItemForPrompt,
+  serializeItemForSummaryPrompt,
+  withRetry,
+} from "@/lib/ai/utils";
 import { buildConflictPrompt } from "@/lib/prompts/conflict";
 import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
-import type { ItemsRow } from "@/types/database";
+import { buildSummaryPrompt } from "@/lib/prompts/summary";
+import type { ItemsRow, Sentiment } from "@/types/database";
 
 /**
  * Gemini's free tier has a tight requests-per-minute cap, separate from
@@ -65,6 +73,28 @@ export class GeminiProvider implements AIProvider {
     );
   }
 
+  /**
+   * Unlike every other prompt (pure JSON), Section 7.6's summary prompt asks
+   * for prose followed by a JSON footer — forcing `responseMimeType:
+   * "application/json"` here would make the model mangle the narrative to
+   * fit a JSON shape instead of returning the mixed format we actually want.
+   */
+  private async callFreeform(prompt: string, temperature: number, maxOutputTokens: number) {
+    return withRetry(
+      () =>
+        this.client.models.generateContent({
+          model: this.model,
+          contents: prompt,
+          config: {
+            temperature,
+            maxOutputTokens,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        }),
+      geminiRateLimiter
+    );
+  }
+
   async extract(newsletterBody: string, ragContext?: RagContext): Promise<AICallResult<ExtractedItem[]>> {
     const prompt = buildExtractionPrompt(newsletterBody, ragContext);
 
@@ -100,8 +130,35 @@ export class GeminiProvider implements AIProvider {
     };
   }
 
-  async summarise(): Promise<AICallResult<SummaryResult>> {
-    throw new Error("GeminiProvider.summarise is not implemented until Phase 6.");
+  async summarise(items: ItemsRow[], type: "weekly" | "monthly"): Promise<AICallResult<SummaryResult>> {
+    if (items.length === 0) {
+      return { data: { narrative: "", key_themes: [], dominant_sentiment: "neutral", watchlist_mentions: {} }, inputTokens: 0, outputTokens: 0 };
+    }
+
+    const dates = items.map((i) => i.date).sort();
+    const prompt = buildSummaryPrompt(
+      type,
+      dates[0],
+      dates[dates.length - 1],
+      items.length,
+      JSON.stringify(items.map(serializeItemForSummaryPrompt))
+    );
+
+    // Section 6.3: summary calls get a slightly higher temperature for more interpretive prose.
+    const summaryTemperature = Math.min(this.temperature + 0.1, 0.8);
+    const response = await this.callFreeform(prompt, summaryTemperature, 8192);
+    const { narrative, json } = parseNarrativeWithJsonFooter(response.text ?? "");
+
+    return {
+      data: {
+        narrative,
+        key_themes: Array.isArray(json.key_themes) ? (json.key_themes as string[]) : [],
+        dominant_sentiment: (json.dominant_sentiment as Sentiment) ?? "neutral",
+        watchlist_mentions: (json.watchlist_mentions as Record<string, number>) ?? {},
+      },
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+    };
   }
 
   async detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>> {

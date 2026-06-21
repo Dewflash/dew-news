@@ -20,27 +20,24 @@ export async function toggleHighlight(itemId: string, sentenceIndex: number, col
     .eq("is_deleted", false)
     .maybeSingle();
 
-  if (existing) {
-    if (existing.highlight_colour === colour) {
-      await supabase
-        .from("annotations")
-        .update({ is_deleted: true, updated_at: new Date().toISOString() })
-        .eq("id", existing.id);
-    } else {
-      await supabase
-        .from("annotations")
-        .update({ highlight_colour: colour, updated_at: new Date().toISOString() })
-        .eq("id", existing.id);
-    }
-  } else {
-    await supabase.from("annotations").insert({
-      user_id: userId,
-      item_id: itemId,
-      sentence_index: sentenceIndex,
-      annotation_type: "highlight",
-      highlight_colour: colour,
-    });
-  }
+  const { error } = existing
+    ? existing.highlight_colour === colour
+      ? await supabase
+          .from("annotations")
+          .update({ is_deleted: true, updated_at: new Date().toISOString() })
+          .eq("id", existing.id)
+      : await supabase
+          .from("annotations")
+          .update({ highlight_colour: colour, updated_at: new Date().toISOString() })
+          .eq("id", existing.id)
+    : await supabase.from("annotations").insert({
+        user_id: userId,
+        item_id: itemId,
+        sentence_index: sentenceIndex,
+        annotation_type: "highlight",
+        highlight_colour: colour,
+      });
+  if (error) throw new Error(error.message);
   revalidatePath("/feed");
   revalidatePath("/search");
 }
@@ -60,19 +57,18 @@ export async function toggleStar(itemId: string) {
     .eq("is_deleted", false)
     .maybeSingle();
 
-  if (existing) {
-    await supabase
-      .from("annotations")
-      .update({ is_deleted: true, updated_at: new Date().toISOString() })
-      .eq("id", existing.id);
-  } else {
-    await supabase.from("annotations").insert({
-      user_id: userId,
-      item_id: itemId,
-      sentence_index: null,
-      annotation_type: "star",
-    });
-  }
+  const { error } = existing
+    ? await supabase
+        .from("annotations")
+        .update({ is_deleted: true, updated_at: new Date().toISOString() })
+        .eq("id", existing.id)
+    : await supabase.from("annotations").insert({
+        user_id: userId,
+        item_id: itemId,
+        sentence_index: null,
+        annotation_type: "star",
+      });
+  if (error) throw new Error(error.message);
   revalidatePath("/feed");
   revalidatePath("/search");
 }
@@ -93,27 +89,32 @@ export async function saveNote(itemId: string, sentenceIndex: number | null, not
   query = sentenceIndex === null ? query.is("sentence_index", null) : query.eq("sentence_index", sentenceIndex);
   const { data: existing } = await query.maybeSingle();
 
+  let saveError: { message: string } | null = null;
   if (!trimmed) {
     if (existing) {
-      await supabase
+      const { error } = await supabase
         .from("annotations")
         .update({ is_deleted: true, updated_at: new Date().toISOString() })
         .eq("id", existing.id);
+      saveError = error;
     }
   } else if (existing) {
-    await supabase
+    const { error } = await supabase
       .from("annotations")
       .update({ note_text: trimmed, updated_at: new Date().toISOString() })
       .eq("id", existing.id);
+    saveError = error;
   } else {
-    await supabase.from("annotations").insert({
+    const { error } = await supabase.from("annotations").insert({
       user_id: userId,
       item_id: itemId,
       sentence_index: sentenceIndex,
       annotation_type: "note",
       note_text: trimmed,
     });
+    saveError = error;
   }
+  if (saveError) throw new Error(saveError.message);
   revalidatePath("/feed");
   revalidatePath("/search");
 }

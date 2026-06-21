@@ -58,8 +58,8 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-white/10 bg-card px-4 py-3">
-        <span className="text-lg font-semibold text-white">dew-news</span>
+      <header className="flex items-center justify-between gap-2 border-b border-white/10 bg-card px-4 py-3">
+        <span className="shrink-0 text-lg font-semibold text-white">dew-news</span>
         <nav className="hidden gap-4 text-sm text-gray-300 sm:flex">
           {NAV_LINKS.map((link) => (
             <Link key={link.href} href={link.href} className="flex items-center gap-1.5 hover:text-white">
@@ -79,11 +79,9 @@ export default async function DashboardLayout({
             "use server";
             await signOut({ redirectTo: "/login" });
           }}
+          className="min-w-0"
         >
-          <button
-            type="submit"
-            className="text-sm text-gray-400 hover:text-white"
-          >
+          <button type="submit" className="block max-w-[55vw] truncate text-sm text-gray-400 hover:text-white sm:max-w-none">
             {session?.user?.email} · Sign out
           </button>
         </form>

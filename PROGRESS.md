@@ -7,7 +7,59 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5c — complete. Cron automation, and nav badges all built (watchlist dynamic score recalculation deliberately skipped — see "Phase 5c — Nav Badges" below for why). Phase 5 (Section 15) is now fully done; Phase 6 (auto-digests) is next, not started.
+Phase 5 (Section 15) is fully done. Phase 6 ("Digests & Polish") is **complete** — all three sub-phases (6a digest generation, 6b settings stats/chart, 6c mobile/loading/optimistic UI/error states) are done.
+
+## Phase 6c — Mobile Pass, Loading Skeletons, Optimistic UI, Error States (2026-06-21)
+
+**Built:**
+- `components/ui/Skeleton.tsx` — base `Skeleton` block plus `ItemCardSkeleton`/`FeedSkeleton`; added `loading.tsx` for every dashboard route (`feed`, `digest`, `watchlist`, `conflicts`, `correlations`, `search`, `settings`) so navigating shows an immediate skeleton instead of a blank page while the server component fetches.
+- `app/(dashboard)/error.tsx` and `app/error.tsx` — client error boundaries with a "Try again" reset button, so an unhandled error in any page/action no longer shows Next.js's default crash screen.
+- **Optimistic UI for annotations (Section 17.1: "Annotation save < 200ms, optimistic UI, background sync")** — `components/feed/ItemCard.tsx` now uses `useOptimistic` with a local reducer (`applyAnnotationAction`) so highlight/star/note toggles update the UI instantly, before the server action resolves. `lib/actions/annotations.ts`'s three actions (`toggleHighlight`, `toggleStar`, `saveNote`) were updated to actually check and throw on Supabase errors (previously the `error` field was silently discarded) so failures are catchable; `ItemCard` now shows a dismissible inline error banner ("Couldn't save highlight/note/star — try again") if the background save fails, rather than silently reverting with no explanation.
+- **Mobile 375px pass** — reviewed every dashboard view; most of the app was already mobile-first (flex-wrap, no fixed pixel widths). Found and fixed two real overflow risks: the header's email + "Sign out" button could overflow next to the logo on narrow screens (now truncates with a `max-w-[55vw]` cap on mobile); the Settings "Data Sources" list and add-source form could overflow with long names/emails (added `min-w-0`/`truncate`/`shrink-0`, and the add-source form now stacks vertically below `sm:`).
+- Error states already mostly existed from earlier phases and were left as-is: empty feed (`FeedClient`'s "No items match the current filters"), failed fetch / failed digest processing (Settings' Fetch History section already shows per-run and per-digest status with a Retry button, colour-coded).
+
+**Verified:**
+- `npx tsc --noEmit` clean.
+- `npm run build` clean (all 14 routes compiled, no errors).
+- Could not visually screenshot-test at 375px — no browser automation tool available in this session. Recommend a manual check on your end (devtools mobile emulation) of the header and Settings → Data Sources list specifically, since those were the two layout fixes.
+
+## Phase 6b — Settings Stats & Token Usage Chart (2026-06-21)
+
+**Found already mostly built:** `app/(dashboard)/settings/page.tsx` and `SystemSection` in `components/settings/SettingsClient.tsx` already had real (non-placeholder) queries for Section 9.8's "Database stats" (total items, date range, annotations, entities) and most of "Token usage summary" (total tokens/cost this month, breakdown by provider) — this must have shipped in an earlier phase pass. What was actually missing:
+
+- **Breakdown by call type** — Section 9.8 asks for "breakdown by provider **and call type**"; only provider existed. Added `byCallType` alongside the existing `byProvider`.
+- **Token usage chart** — Phase 6 task 10 asks for a chart, not just text. No charting library was installed; added a small dependency-free `SpendByProviderChart` (proportional-width CSS bars) in `SettingsClient.tsx` rather than pulling in a chart library for one small widget.
+- **Missing `user_id` filters** — `sources`, `fetch_runs` (both queries), `processing_log`, `token_usage`, `items` (count + date range), `annotations`, `entities` were all queried without `.eq("user_id", userId)` in the settings page, unlike every other page in the app. Harmless today (single-user app, RLS-equivalent by construction), but inconsistent with the rest of the codebase's pattern — fixed while already touching this file, flagging here since it wasn't explicitly asked for.
+
+**Verified:**
+- `npx tsc --noEmit` and `npm run build` clean.
+- Re-ran the real queries directly against production data after the changes: 5 items, 11 entities, 2 sources, 0 annotations, 30 token_usage rows this month — `byProvider: {gemini: 61299}`, `byCallType: {extraction, conflict, correlation, summary}`, `costByProvider: {gemini: $0.034}`. Confirms the `user_id` filters didn't silently zero anything out.
+
+## Phase 6a — Auto-Digest Generation (2026-06-21)
+
+Weekly/monthly summary generation per Section 13, Section 7.6's canonical prompt, and Section 13.3's regeneration flow.
+
+**Built:**
+- `lib/prompts/summary.ts` — canonical Section 7.6 prompt, verbatim.
+- `lib/ai/utils.ts` — `parseNarrativeWithJsonFooter()`, since the summary prompt (unlike every other prompt) returns prose followed by a JSON footer, not pure JSON. Falls back from a fenced ```json``` block to "last `{` in the text" if the model doesn't fence it.
+- `summarise()` implemented in all three providers (`lib/claude.ts`, `lib/gemini.ts`, `lib/openai.ts`), applying Section 6.3's `Math.min(temperature + 0.1, 0.8)` bump for summary calls. **Gemini-specific fix:** the shared `call()` helper forces `responseMimeType: "application/json"`, which would make Gemini mangle the narrative into pure JSON — added a separate `callFreeform()` for this prompt instead.
+- `lib/ingestion/digest.ts` — `generateSummary()` (queries items in `[periodStart, periodEnd]` by `items.date`, calls `provider.summarise()`, resolves `watchlist_mentions` entity names to `entities.id` via the same exact-name match `upsertEntity` uses, inserts a new `summaries` row, logs token usage) and `maybeGenerateDigests()` (checked from the existing fetch cron, see below).
+- `lib/actions/digest.ts` — `regenerateSummary(summaryId)`: re-runs `generateSummary` for an existing summary's exact period, throws if there are no items to regenerate from. Per Section 13.3, this is a new INSERT, not an UPDATE — both versions are kept.
+- `components/digest/DigestClient.tsx` — groups summaries by `(period_start, period_end)`; latest `generated_at` per group is shown as the current card (with a Regenerate button), older versions collapse behind a "Show N earlier version(s)" toggle.
+- `app/api/cron/fetch/route.ts` — after `runFetch("cron")` succeeds, calls `maybeGenerateDigests()`, which checks `settings.weekly_digest_enabled`/`digest_day_of_week` and `settings.monthly_digest_enabled`/`digest_day_of_month` against the SGT-shifted "now" (same convention as the existing window check) and generates the relevant digest(s) if due. Guards against duplicate auto-generated rows (e.g. cron jitter/retry on the same day) by skipping if a summary for that exact period already exists — this guard only applies to the automatic path; `regenerateSummary` bypasses it intentionally.
+
+**Deviations / flagged gaps:**
+- **No separate cron entry for digests** — Section 13 doesn't define one, and Vercel Hobby tier only allows one cron invocation/day anyway (already used by `/api/cron/fetch`), so weekly/monthly checks piggyback on that same daily invocation rather than firing independently.
+- **No `is_current` column exists on `summaries`** (confirmed against `supabase/migrations/0001_init.sql`) — "latest marked as current" (Section 13.3) is derived client-side by sorting each period's versions by `generated_at`, not a stored flag. Nothing else reads "current" status, so this wasn't promoted to a schema change per Section 19's no-uninstructed-schema-changes rule.
+- **`conflicts_in_summaries` not populated** — Section 4.13 describes linking conflicts referenced within a summary's period, but Section 13's task list doesn't ask for it and no UI reads it yet. Deferred; flagging here so it isn't forgotten if a future view needs it. There is no equivalent `correlations_in_summaries` table in the schema at all.
+- **`watchlist_mentions` keys**: Section 4.12's column comment says `{entity_id: mention_count}` but Section 7.6's canonical prompt literally asks the model for `{entity_name: mention_count}`. Resolved this by post-processing the model's output — looking up each name against `entities` (exact match) and storing the id when found, falling back to the raw name as the key when the model mentions something not yet tracked as an entity — rather than rewriting the prompt itself.
+
+**Verified:**
+- `npx tsc --noEmit` and `npm run build` both clean.
+- Ran `generateSummary()` directly against real production data (5 real items, Gemini `gemini-2.5-flash-lite`) — produced a coherent prose summary, correctly parsed the JSON footer (`key_themes`, `dominant_sentiment: "mixed"`, empty `watchlist_mentions` since none of today's items mentioned a tracked entity), and inserted into `summaries` with real token counts (865 in / 551 out, ~$0.0003).
+- Re-ran `generateSummary()` for the same period to confirm the regeneration model: two distinct `summaries` rows for the identical `(period_start, period_end)`, different `generated_at` — confirms "new record, both kept" per Section 13.3.
+- Test rows deleted afterward; no test data left in the database.
+- `/digest` route compiles and responds (307 → `/login`, expected — unauthenticated curl request, not an error) under `npm run build` and `npm run dev`.
 
 ## Fetch History + Duplicate-Email Prevention (2026-06-21)
 

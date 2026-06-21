@@ -8,12 +8,19 @@ import type {
   ExtractedItem,
   SummaryResult,
 } from "@/lib/ai/provider";
-import { parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
+import {
+  parseJsonArray,
+  parseNarrativeWithJsonFooter,
+  serializeItemForPrompt,
+  serializeItemForSummaryPrompt,
+  withRetry,
+} from "@/lib/ai/utils";
 import { buildConflictPrompt } from "@/lib/prompts/conflict";
 import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
-import type { ItemsRow } from "@/types/database";
+import { buildSummaryPrompt } from "@/lib/prompts/summary";
+import type { ItemsRow, Sentiment } from "@/types/database";
 
 /** Section 6.1/6.2/15 Phase 5 task 9 — OpenAI implementation of the unified AIProvider interface. */
 export class OpenAIProvider implements AIProvider {
@@ -73,8 +80,35 @@ export class OpenAIProvider implements AIProvider {
     };
   }
 
-  async summarise(): Promise<AICallResult<SummaryResult>> {
-    throw new Error("OpenAIProvider.summarise is not implemented until Phase 6.");
+  async summarise(items: ItemsRow[], type: "weekly" | "monthly"): Promise<AICallResult<SummaryResult>> {
+    if (items.length === 0) {
+      return { data: { narrative: "", key_themes: [], dominant_sentiment: "neutral", watchlist_mentions: {} }, inputTokens: 0, outputTokens: 0 };
+    }
+
+    const dates = items.map((i) => i.date).sort();
+    const prompt = buildSummaryPrompt(
+      type,
+      dates[0],
+      dates[dates.length - 1],
+      items.length,
+      JSON.stringify(items.map(serializeItemForSummaryPrompt))
+    );
+
+    // Section 6.3: summary calls get a slightly higher temperature for more interpretive prose.
+    const summaryTemperature = Math.min(this.temperature + 0.1, 0.8);
+    const response = await this.call(prompt, summaryTemperature, 4096);
+    const { narrative, json } = parseNarrativeWithJsonFooter(response.choices[0]?.message.content ?? "");
+
+    return {
+      data: {
+        narrative,
+        key_themes: Array.isArray(json.key_themes) ? (json.key_themes as string[]) : [],
+        dominant_sentiment: (json.dominant_sentiment as Sentiment) ?? "neutral",
+        watchlist_mentions: (json.watchlist_mentions as Record<string, number>) ?? {},
+      },
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+    };
   }
 
   async detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>> {

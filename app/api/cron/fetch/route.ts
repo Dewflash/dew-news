@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getUserId } from "@/lib/user";
 import { writeLog } from "@/lib/ingestion/log";
 import { runFetch } from "@/lib/ingestion/run";
+import { maybeGenerateDigests } from "@/lib/ingestion/digest";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest) {
   const supabase = createServiceClient();
   const userId = await getUserId(supabase);
 
-  const { data: settings } = await supabase.from("settings").select("fetch_schedule").eq("user_id", userId).single();
+  const { data: settings } = await supabase.from("settings").select("*").eq("user_id", userId).single();
   const fetchSchedule = settings?.fetch_schedule ?? "0 6 * * *";
 
   if (!isWithinScheduledWindow(fetchSchedule, new Date())) {
@@ -64,5 +65,19 @@ export async function GET(request: NextRequest) {
   }
 
   const fetchRun = await runFetch("cron");
+
+  // Section 13/14.1: Hobby tier only allows this one daily cron entry, so
+  // weekly/monthly digest triggers piggyback on the same invocation rather
+  // than getting their own cron entry.
+  if (settings) {
+    try {
+      const sgtNow = new Date(Date.now() + SGT_OFFSET_MINUTES * 60_000);
+      await maybeGenerateDigests(supabase, userId, settings, sgtNow);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await writeLog(supabase, { userId, level: "error", stage: "summarise", message: `Digest generation check failed: ${message}` });
+    }
+  }
+
   return NextResponse.json({ skipped: false, fetchRun });
 }

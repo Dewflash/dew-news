@@ -123,3 +123,46 @@ export function serializeItemForPrompt(item: ItemsRow) {
     secondary_categories: item.secondary_categories,
   };
 }
+
+/** Section 7.6: summary generation needs sentiment/significance too, for the "sentiment shift" and "lasting implications" sections. */
+export function serializeItemForSummaryPrompt(item: ItemsRow) {
+  return {
+    summary: item.summary,
+    full_context: item.full_context,
+    date: item.date,
+    gics_sector: item.gics_sector,
+    secondary_categories: item.secondary_categories,
+    sentiment: item.sentiment,
+    significance: item.significance,
+  };
+}
+
+/**
+ * Section 7.6's summary prompt asks for prose followed by a JSON footer,
+ * unlike every other prompt (which is JSON-only) — so it needs its own
+ * parser instead of `parseJsonArray`. Prefers a fenced ```json``` block if
+ * the model wrapped it despite instructions; otherwise falls back to the
+ * last `{` in the text, since the footer is always the final thing returned.
+ */
+export function parseNarrativeWithJsonFooter(text: string): { narrative: string; json: Record<string, unknown> } {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    const narrative = text.slice(0, text.indexOf(fenced[0])).trim();
+    try {
+      return { narrative, json: JSON.parse(fenced[1]) };
+    } catch {
+      throw new ModelOutputParseError("Model's JSON footer was not valid JSON.", text);
+    }
+  }
+
+  const lastBrace = text.lastIndexOf("{");
+  if (lastBrace === -1) {
+    throw new ModelOutputParseError("Model response had no JSON footer.", text);
+  }
+  const narrative = text.slice(0, lastBrace).trim();
+  try {
+    return { narrative, json: JSON.parse(text.slice(lastBrace)) };
+  } catch {
+    throw new ModelOutputParseError("Model's JSON footer was not valid JSON.", text);
+  }
+}

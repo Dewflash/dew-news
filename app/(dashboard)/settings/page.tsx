@@ -1,34 +1,32 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { getUserId } from "@/lib/user";
 import { SettingsClient } from "@/components/settings/SettingsClient";
-
-const USER_EMAIL = "dewlearns@gmail.com";
 
 export default async function SettingsPage() {
   const supabase = createServiceClient();
+  const userId = await getUserId(supabase);
 
-  const { data: user, error: userError } = await supabase
-    .from("users")
-    .select("id")
-    .eq("email", USER_EMAIL)
-    .single();
-  if (userError) throw new Error(userError.message);
-
-  let { data: settings } = await supabase.from("settings").select("*").eq("user_id", user.id).maybeSingle();
+  let { data: settings } = await supabase.from("settings").select("*").eq("user_id", userId).maybeSingle();
   if (!settings) {
     const { data: created, error: createError } = await supabase
       .from("settings")
-      .insert({ user_id: user.id })
+      .insert({ user_id: userId })
       .select("*")
       .single();
     if (createError) throw new Error(createError.message);
     settings = created;
   }
 
-  const { data: sources } = await supabase.from("sources").select("*").order("fetch_priority", { ascending: true });
+  const { data: sources } = await supabase
+    .from("sources")
+    .select("*")
+    .eq("user_id", userId)
+    .order("fetch_priority", { ascending: true });
 
   const { data: lastFetchRun } = await supabase
     .from("fetch_runs")
     .select("*")
+    .eq("user_id", userId)
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -36,6 +34,7 @@ export default async function SettingsPage() {
   const { data: recentFetchRunRows } = await supabase
     .from("fetch_runs")
     .select("*")
+    .eq("user_id", userId)
     .order("started_at", { ascending: false })
     .limit(10);
 
@@ -57,6 +56,7 @@ export default async function SettingsPage() {
   const { data: processingLog } = await supabase
     .from("processing_log")
     .select("*")
+    .eq("user_id", userId)
     .order("timestamp", { ascending: false })
     .limit(100);
 
@@ -64,25 +64,42 @@ export default async function SettingsPage() {
   monthStart.setUTCDate(1);
   const { data: tokenRows } = await supabase
     .from("token_usage")
-    .select("provider, input_tokens, output_tokens, estimated_cost_usd")
+    .select("provider, call_type, input_tokens, output_tokens, estimated_cost_usd")
+    .eq("user_id", userId)
     .gte("timestamp", monthStart.toISOString());
 
   const byProvider: Record<string, number> = {};
+  const byCallType: Record<string, number> = {};
+  const costByProvider: Record<string, number> = {};
   let totalTokens = 0;
   let totalCostUsd = 0;
   for (const row of tokenRows ?? []) {
     const tokens = row.input_tokens + row.output_tokens;
+    const cost = row.estimated_cost_usd ?? 0;
     totalTokens += tokens;
-    totalCostUsd += row.estimated_cost_usd ?? 0;
+    totalCostUsd += cost;
     byProvider[row.provider] = (byProvider[row.provider] ?? 0) + tokens;
+    byCallType[row.call_type] = (byCallType[row.call_type] ?? 0) + tokens;
+    costByProvider[row.provider] = (costByProvider[row.provider] ?? 0) + cost;
   }
 
-  const { count: totalItems } = await supabase.from("items").select("*", { count: "exact", head: true });
+  const { count: totalItems } = await supabase
+    .from("items")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId);
   const { count: totalAnnotations } = await supabase
     .from("annotations")
-    .select("*", { count: "exact", head: true });
-  const { count: totalEntities } = await supabase.from("entities").select("*", { count: "exact", head: true });
-  const { data: dateRange } = await supabase.from("items").select("date").order("date", { ascending: true });
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId);
+  const { count: totalEntities } = await supabase
+    .from("entities")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId);
+  const { data: dateRange } = await supabase
+    .from("items")
+    .select("date")
+    .eq("user_id", userId)
+    .order("date", { ascending: true });
   const dateRangeStart = dateRange && dateRange.length > 0 ? dateRange[0].date : null;
   const dateRangeEnd = dateRange && dateRange.length > 0 ? dateRange[dateRange.length - 1].date : null;
 
@@ -95,7 +112,7 @@ export default async function SettingsPage() {
         lastFetchRun={lastFetchRun ?? null}
         recentFetchRuns={recentFetchRuns ?? []}
         processingLog={processingLog ?? []}
-        tokenUsage={{ totalTokens, totalCostUsd, byProvider }}
+        tokenUsage={{ totalTokens, totalCostUsd, byProvider, byCallType, costByProvider }}
         dbStats={{
           totalItems: totalItems ?? 0,
           dateRangeStart,

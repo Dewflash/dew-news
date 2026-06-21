@@ -1,12 +1,63 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useOptimistic, useRef, useState, useTransition } from "react";
 import { SentimentBadge, SignificanceDot } from "@/components/ui/Badge";
 import { Pill } from "@/components/ui/Pill";
 import { formatReadingTime } from "@/lib/format";
 import { saveNote, toggleHighlight, toggleStar } from "@/lib/actions/annotations";
-import type { CardDensity, HighlightColour, ItemSentence } from "@/types/database";
+import type { AnnotationsRow, CardDensity, HighlightColour, ItemSentence } from "@/types/database";
 import type { DisplayItem } from "@/lib/items";
+
+type AnnotationAction =
+  | { type: "highlight"; sentenceIndex: number; colour: HighlightColour }
+  | { type: "star" }
+  | { type: "note"; sentenceIndex: number | null; text: string };
+
+function fakeAnnotation(partial: Partial<AnnotationsRow>): AnnotationsRow {
+  const now = new Date().toISOString();
+  return {
+    id: `optimistic-${Math.random()}`,
+    user_id: "",
+    item_id: "",
+    sentence_index: null,
+    annotation_type: "star",
+    highlight_colour: null,
+    note_text: null,
+    created_at: now,
+    updated_at: now,
+    is_deleted: false,
+    ...partial,
+  };
+}
+
+function applyAnnotationAction(state: AnnotationsRow[], action: AnnotationAction): AnnotationsRow[] {
+  switch (action.type) {
+    case "highlight": {
+      const existing = state.find(
+        (a) => a.annotation_type === "highlight" && a.sentence_index === action.sentenceIndex
+      );
+      const without = state.filter((a) => a !== existing);
+      if (existing && existing.highlight_colour === action.colour) return without;
+      return [
+        ...without,
+        fakeAnnotation({ annotation_type: "highlight", sentence_index: action.sentenceIndex, highlight_colour: action.colour }),
+      ];
+    }
+    case "star": {
+      const existing = state.find((a) => a.annotation_type === "star" && a.sentence_index === null);
+      if (existing) return state.filter((a) => a !== existing);
+      return [...state, fakeAnnotation({ annotation_type: "star", sentence_index: null })];
+    }
+    case "note": {
+      const without = state.filter((a) => !(a.annotation_type === "note" && a.sentence_index === action.sentenceIndex));
+      if (!action.text.trim()) return without;
+      return [
+        ...without,
+        fakeAnnotation({ annotation_type: "note", sentence_index: action.sentenceIndex, note_text: action.text.trim() }),
+      ];
+    }
+  }
+}
 
 const HIGHLIGHT_BG: Record<HighlightColour, string> = {
   yellow: "bg-yellow-500/30",
@@ -178,17 +229,19 @@ export function ItemCard({
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const [noteEditing, setNoteEditing] = useState<number | "item" | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [optimisticAnnotations, applyOptimistic] = useOptimistic(item.annotations, applyAnnotationAction);
 
   const secondaryTags = item.secondary_categories.slice(0, 2);
 
-  const isStarred = item.annotations.some((a) => a.annotation_type === "star" && a.sentence_index === null);
-  const highlightCount = item.annotations.filter((a) => a.annotation_type === "highlight").length;
+  const isStarred = optimisticAnnotations.some((a) => a.annotation_type === "star" && a.sentence_index === null);
+  const highlightCount = optimisticAnnotations.filter((a) => a.annotation_type === "highlight").length;
   const itemNote =
-    item.annotations.find((a) => a.annotation_type === "note" && a.sentence_index === null)?.note_text ?? null;
+    optimisticAnnotations.find((a) => a.annotation_type === "note" && a.sentence_index === null)?.note_text ?? null;
 
   const highlightBySentence = new Map<number, HighlightColour>();
   const noteBySentence = new Map<number, string>();
-  for (const a of item.annotations) {
+  for (const a of optimisticAnnotations) {
     if (a.sentence_index === null) continue;
     if (a.annotation_type === "highlight" && a.highlight_colour) highlightBySentence.set(a.sentence_index, a.highlight_colour);
     if (a.annotation_type === "note" && a.note_text) noteBySentence.set(a.sentence_index, a.note_text);
@@ -200,8 +253,13 @@ export function ItemCard({
   }
 
   function handleHighlight(index: number, colour: HighlightColour) {
-    startTransition(() => {
-      void toggleHighlight(item.id, index, colour);
+    startTransition(async () => {
+      applyOptimistic({ type: "highlight", sentenceIndex: index, colour });
+      try {
+        await toggleHighlight(item.id, index, colour);
+      } catch {
+        setSaveError("Couldn't save highlight — try again.");
+      }
     });
   }
 
@@ -214,20 +272,39 @@ export function ItemCard({
   function handleSaveNote() {
     if (noteEditing === null) return;
     const sentenceIndex = noteEditing === "item" ? null : noteEditing;
-    startTransition(() => {
-      void saveNote(item.id, sentenceIndex, noteDraft);
+    const text = noteDraft;
+    startTransition(async () => {
+      applyOptimistic({ type: "note", sentenceIndex, text });
+      try {
+        await saveNote(item.id, sentenceIndex, text);
+      } catch {
+        setSaveError("Couldn't save note — try again.");
+      }
     });
     setNoteEditing(null);
   }
 
   function handleToggleStar() {
-    startTransition(() => {
-      void toggleStar(item.id);
+    startTransition(async () => {
+      applyOptimistic({ type: "star" });
+      try {
+        await toggleStar(item.id);
+      } catch {
+        setSaveError("Couldn't save star — try again.");
+      }
     });
   }
 
   return (
     <div className="rounded-lg border border-white/10 bg-card p-4">
+      {saveError && (
+        <div className="mb-2 flex items-center justify-between gap-2 rounded bg-bearish/20 px-2 py-1 text-xs text-bearish">
+          <span>{saveError}</span>
+          <button type="button" onClick={() => setSaveError(null)} className="shrink-0 hover:text-white">
+            ✕
+          </button>
+        </div>
+      )}
       <div
         role="button"
         tabIndex={0}

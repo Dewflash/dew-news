@@ -140,21 +140,21 @@ function DataSourcesSection({
       <div className="space-y-2">
         {sources.map((s) => (
           <div key={s.id} className="flex items-center gap-3 rounded border border-white/5 bg-white/5 p-2">
-            <div className="flex-1">
-              <p className="text-sm text-white">{s.name}</p>
-              <p className="text-xs text-gray-500">{s.sender_email}</p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-white">{s.name}</p>
+              <p className="truncate text-xs text-gray-500">{s.sender_email}</p>
             </div>
             <button
               type="button"
               onClick={() => startTransition(() => toggleSource(s.id, s.is_active))}
-              className={`text-xs ${s.is_active ? "text-bullish" : "text-gray-500"}`}
+              className={`shrink-0 text-xs ${s.is_active ? "text-bullish" : "text-gray-500"}`}
             >
               {s.is_active ? "Active" : "Inactive"}
             </button>
             <button
               type="button"
               onClick={() => startTransition(() => deleteSource(s.id))}
-              className="text-xs text-gray-500 hover:text-bearish"
+              className="shrink-0 text-xs text-gray-500 hover:text-bearish"
             >
               Delete
             </button>
@@ -170,7 +170,7 @@ function DataSourcesSection({
             setNewEmail("");
           })
         }
-        className="flex gap-2"
+        className="flex flex-col gap-2 sm:flex-row"
       >
         <input
           type="text"
@@ -491,6 +491,27 @@ function FetchHistorySection({ recentFetchRuns }: { recentFetchRuns: FetchRunWit
   );
 }
 
+/** No chart library — a handful of proportional-width bars covers Section 15 Phase 6's "monthly spend by provider" chart without adding a dependency. */
+function SpendByProviderChart({ costByProvider }: { costByProvider: Record<string, number> }) {
+  const entries = Object.entries(costByProvider).filter(([, cost]) => cost > 0);
+  if (entries.length === 0) return null;
+  const max = Math.max(...entries.map(([, cost]) => cost));
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      {entries.map(([provider, cost]) => (
+        <div key={provider} className="flex items-center gap-2 text-xs">
+          <span className="w-16 shrink-0 text-gray-400">{provider}</span>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/5">
+            <div className="h-full rounded-full bg-accent" style={{ width: `${(cost / max) * 100}%` }} />
+          </div>
+          <span className="w-16 shrink-0 text-right text-gray-300">${cost.toFixed(2)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SystemSection({
   settings,
   lastFetchRun,
@@ -501,7 +522,13 @@ function SystemSection({
   settings: SettingsRow;
   lastFetchRun: FetchRunsRow | null;
   processingLog: ProcessingLogRow[];
-  tokenUsage: { totalTokens: number; totalCostUsd: number; byProvider: Record<string, number> };
+  tokenUsage: {
+    totalTokens: number;
+    totalCostUsd: number;
+    byProvider: Record<string, number>;
+    byCallType: Record<string, number>;
+    costByProvider: Record<string, number>;
+  };
   dbStats: { totalItems: number; dateRangeStart: string | null; dateRangeEnd: string | null; totalAnnotations: number; totalEntities: number };
 }) {
   const [isFetching, startTransition] = useTransition();
@@ -572,11 +599,22 @@ function SystemSection({
         <p>
           {tokenUsage.totalTokens.toLocaleString()} tokens · ${tokenUsage.totalCostUsd.toFixed(2)} estimated
         </p>
-        {Object.entries(tokenUsage.byProvider).map(([provider, tokens]) => (
-          <p key={provider} className="text-xs text-gray-500">
-            {provider}: {tokens.toLocaleString()} tokens
-          </p>
-        ))}
+        <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-gray-500">
+          {Object.entries(tokenUsage.byProvider).map(([provider, tokens]) => (
+            <span key={provider}>
+              {provider}: {tokens.toLocaleString()}
+            </span>
+          ))}
+        </div>
+        <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-gray-500">
+          {Object.entries(tokenUsage.byCallType).map(([callType, tokens]) => (
+            <span key={callType}>
+              {callType}: {tokens.toLocaleString()}
+            </span>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-gray-400">Estimated spend by provider</p>
+        <SpendByProviderChart costByProvider={tokenUsage.costByProvider} />
       </div>
 
       <div className="text-sm text-gray-300">
@@ -617,7 +655,13 @@ export function SettingsClient(props: {
   lastFetchRun: FetchRunsRow | null;
   recentFetchRuns: FetchRunWithDigests[];
   processingLog: ProcessingLogRow[];
-  tokenUsage: { totalTokens: number; totalCostUsd: number; byProvider: Record<string, number> };
+  tokenUsage: {
+    totalTokens: number;
+    totalCostUsd: number;
+    byProvider: Record<string, number>;
+    byCallType: Record<string, number>;
+    costByProvider: Record<string, number>;
+  };
   dbStats: { totalItems: number; dateRangeStart: string | null; dateRangeEnd: string | null; totalAnnotations: number; totalEntities: number };
 }) {
   return (
