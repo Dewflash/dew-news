@@ -7,7 +7,7 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5b — RAG context + conflict/correlation detection — built and now verified end-to-end against real Gmail + Gemini (see "Phase 4/5a/5b End-to-End Verification" below). 5c (cron automation, watchlist dynamic scores, nav badges) not started.
+Phase 5c — cron automation built locally (see "Phase 5c — Cron Automation" below), not yet deployed to Vercel. Watchlist dynamic score recalculation and nav badges (the rest of 5c) not started.
 
 ## Fetch History + Duplicate-Email Prevention (2026-06-21)
 
@@ -16,7 +16,7 @@ Built per Kevin's explicit request, ahead of/outside the original phase plan (fl
 - **`digests.gmail_message_id`** (new nullable column, migration `0003_digest_message_id.sql`) + a unique index on `(user_id, gmail_message_id)` where not null. **Applied to the live Supabase DB** (Kevin ran it via the SQL editor).
 - `lib/ingestion/run.ts` — `runFetch()` now filters Gmail search results against already-processed `gmail_message_id`s before processing, so re-running "Fetch Now" within the same rolling 24h search window (or an overlapping cron run) never re-processes the same email twice. Logs how many were skipped.
 - `lib/ingestion/run.ts` — extracted the per-email extract/save/digest-update logic into an exported `processDigestEmail()`, shared between the main fetch loop and the new retry action below (previously inlined only in the loop).
-- `lib/actions/fetch.ts` — new `reprocessDigest(digestId)` server action: reprocesses one previously **failed** digest from its already-stored `raw_body` (no fresh Gmail fetch), via the shared `processDigestEmail()`. Sets `digests.reprocessed`/`reprocessed_at` (pre-existing, previously-unused columns) on success. Scope note: runs extraction + save only — dedup/conflict/correlation detection for the reprocessed item is deferred to the next full fetch run, not re-run inline, to keep the retry action simple and fast.
+- `lib/actions/fetch.ts` — new `reprocessDigest(digestId)` server action: reprocesses one previously **failed** digest from its already-stored `raw_body` (no fresh Gmail fetch), via the shared `processDigestEmail()`. Sets `digests.reprocessed`/`reprocessed_at` (pre-existing, previously-unused columns) on success. **Updated 2026-06-21** (see bug-fix note below): also runs the same-day dedup pass before finishing — originally deferred to the next full fetch run, but that left it possible to retry a digest whose underlying email already had a successful sibling digest and silently re-save the same items as duplicates.
 - `app/(dashboard)/settings/page.tsx` + `components/settings/SettingsClient.tsx` — new "Fetch History" section: lists the last 10 fetch runs with each run's per-email subject + status (success/failed/skipped) + item count, and a "Retry" button on any failed email. This is the in-app alternative Kevin chose over an external email/Resend notification.
 - **Backfill**: the migration is additive and can't retroactively populate `gmail_message_id` on digests created before it existed. One-off backfill performed for the single pre-migration digest (real Reuters "Weekend Briefing" email, subject "U.S. and Iran give it another try") — matched to its real Gmail message via a timestamp-scoped search (exact `received_at` ± 2h, since the email's `Date` header didn't line up with a wide `after:` epoch query) and updated directly. The 3 leftover **failed** duplicate digests from this morning's pre-fix debugging (0 items each) were left as-is in Fetch History at Kevin's request, kept as visible history rather than deleted.
 - **Feed traceability**: each item card (Feed + Search) now shows a "From: \<email subject\>" line, sourced from `digests.email_subject`. When `gmail_message_id` is present, the subject is a clickable link (`https://mail.google.com/mail/u/0/#all/<id>`) opening that exact email directly in Gmail. Items from digests without a stored message id (anything pre-migration and not backfilled) show the subject as plain text. `lib/items.ts` (`RawItemRow`/`DisplayItem`), `app/(dashboard)/feed/page.tsx`, `lib/search.ts`, `components/feed/ItemCard.tsx`.
@@ -26,7 +26,29 @@ Built per Kevin's explicit request, ahead of/outside the original phase plan (fl
 - `npx tsc --noEmit` / `npm run build` — clean.
 - Dev server restarted clean, `/settings` and `/feed` compile and respond (redirect to `/login` when unauthenticated, as expected).
 - Migration applied live; backfill update confirmed via direct query (digest now carries the real `gmail_message_id`).
-- **Not yet verified**: an actual duplicate-prevention run (two consecutive "Fetch Now" calls confirming the second skips the already-processed email) and a real failed-email retry via the new button — both pending Kevin's next live test.
+- Duplicate-prevention and Retry both tested live by Kevin (see bug-fix note immediately below for what the Retry test surfaced).
+
+### Bug fix: Retry created duplicate items (2026-06-21)
+Kevin retried one of the 3 leftover failed duplicate digests (pre-`gmail_message_id` migration). Its sibling digest had already succeeded with 5 items for the same email. Since `reprocessDigest` skipped the dedup pass by design, it re-saved all 5 stories as brand-new items with no duplicate check — confirmed via direct DB query (two digests, 5 identical-summary items each, neither flagged `is_duplicate`).
+- **Data fix**: deleted the 5 newly-created duplicate items (cascade-safe via `item_entities` FK), reset that digest's `item_count` to 0. Left the digest row itself as history, per Kevin's earlier "keep as history" instruction.
+- **Code fix**: exported `runDedupPass` from `lib/ingestion/run.ts`; `reprocessDigest` (`lib/actions/fetch.ts`) now calls it against the day's existing items right after saving, same as the full fetch pipeline. Confirmed `tsc`/`build` clean.
+- Note: Feed/Search don't currently filter on `items.is_duplicate` at all (checked — no occurrence outside `lib/ingestion/`), so a future duplicate caught by this pass is recorded but still visible in the Feed today. Flagging as a known gap, not fixed here since it wasn't part of what was asked.
+
+## Phase 5c — Cron Automation (2026-06-21)
+
+Built per SPEC.md Section 14 + Section 15 Phase 5 task 1–2 (the only 5c items explicitly requested this session — watchlist dynamic scores and nav badges remain not started):
+- `vercel.json` (new) — single daily cron, `0 22 * * *` (22:00 UTC = 06:00 SGT default), hitting `/api/cron/fetch`. Free/Hobby tier only supports this one daily invocation (Section 14.1's note).
+- `app/api/cron/fetch/route.ts` (new) — `GET` handler:
+  - Verifies `Authorization: Bearer <CRON_SECRET>` against `process.env.CRON_SECRET`; 401 otherwise (Section 14.2). `CRON_SECRET` already existed in `.env.local`.
+  - Since `settings.fetch_schedule` is user-editable independently of the one fixed `vercel.json` entry, the handler converts "now" to SGT and checks it's within ±90 minutes of the user's configured `fetch_schedule` (parsed minute/hour, plus day-of-week if not `*`) before proceeding — outside that window it's a no-op, logged to `processing_log` and returned as `{ skipped: true }`. The 90-minute tolerance covers Vercel's documented cron-jitter window (can fire up to ~an hour late).
+  - On match, calls the existing `runFetch("cron")` — no pipeline changes were needed since it already supported the `"cron"` trigger type.
+- Known limitation (matches spec's own framing, not a bug): if Kevin changes `fetch_schedule` to a time far from 06:00 SGT, the daily fetch still won't actually run then, since Vercel's Hobby tier only fires the one cron entry once a day at its fixed UTC time. Changing the *displayed/stored* schedule doesn't move the actual trigger — only redeploying `vercel.json` does. This is the tradeoff the spec explicitly calls out for the free tier.
+
+### Verified
+- `npx tsc --noEmit` / `npm run build` — clean; `/api/cron/fetch` appears in the build's route list.
+- Local dev server: no `Authorization` header → 401; wrong secret → 401; correct secret outside the configured window → `{"skipped":true,...}` (current time was outside the default 06:00 SGT window, as expected).
+- **Not yet verified**: an actual successful cron-triggered fetch (correct secret + within window) — would need either a local clock override or a real Vercel deploy + waiting for/triggering the schedule.
+- **Not yet deployed**: `vercel.json` and the route exist locally/committed but Vercel won't pick up the cron schedule until this is deployed to production.
 
 ## Phase 4/5a/5b End-to-End Verification + Bug Fixes (2026-06-21)
 
