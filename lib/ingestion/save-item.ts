@@ -15,6 +15,13 @@ function sanitiseGicsSector(sector: string | null): string | null {
   return sector && (GICS_SECTORS as readonly string[]).includes(sector) ? sector : null;
 }
 
+const DATE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Falls back to the email's own date if the model omits/malforms `date` — `date` is NOT NULL on `items`. */
+function sanitiseDate(date: string | null | undefined, fallback: string): string {
+  return date && DATE_FORMAT.test(date) ? date : fallback;
+}
+
 /** Prompt's approved list (Section 7.2) is the extended categories only, max 3. */
 function sanitiseSecondaryCategories(categories: string[]): string[] {
   return categories.filter((c) => (EXTENDED_CATEGORIES as readonly string[]).includes(c)).slice(0, 3);
@@ -25,14 +32,15 @@ export async function saveExtractedItem(
   supabase: ReturnType<typeof createServiceClient>,
   userId: string,
   digestId: string,
-  item: ExtractedItem
+  item: ExtractedItem,
+  fallbackDate: string
 ): Promise<ItemsRow> {
   const { data: savedItem, error } = await supabase
     .from("items")
     .insert({
       digest_id: digestId,
       user_id: userId,
-      date: item.date,
+      date: sanitiseDate(item.date, fallbackDate),
       summary: item.summary,
       sentences: item.sentences,
       full_context: item.full_context,

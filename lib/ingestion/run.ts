@@ -127,10 +127,23 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
         });
 
         const eligibleItems = extractedItems.filter((item) => item.significance >= settings.min_significance);
+        const fallbackDate = emailDate ? new Date(emailDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
 
         const savedItems: ItemsRow[] = [];
         for (const item of eligibleItems) {
-          savedItems.push(await saveExtractedItem(supabase, userId, digest.id, item));
+          try {
+            savedItems.push(await saveExtractedItem(supabase, userId, digest.id, item, fallbackDate));
+          } catch (itemErr) {
+            const itemMessage = itemErr instanceof Error ? itemErr.message : String(itemErr);
+            await writeLog(supabase, {
+              userId,
+              fetchRunId: fetchRun.id,
+              level: "warning",
+              stage: "extract",
+              message: `Skipped one item from "${subject ?? "(no subject)"}": ${itemMessage}`,
+              metadata: { digest_id: digest.id, item_summary: item.summary },
+            });
+          }
         }
         itemsExtracted += savedItems.length;
         allSavedItems.push(...savedItems);
