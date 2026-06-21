@@ -19,7 +19,7 @@ import type {
 
 const PROVIDER_MODELS: Record<ActiveProvider, string[]> = {
   claude: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
-  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
   openai: ["gpt-4o", "gpt-4o-mini"],
 };
 

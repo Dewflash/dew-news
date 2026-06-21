@@ -13,6 +13,7 @@ const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number
   "claude-haiku-4-5": { input: 0.8, output: 4 },
   "gemini-2.5-pro": { input: 1.25, output: 10 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4 },
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
