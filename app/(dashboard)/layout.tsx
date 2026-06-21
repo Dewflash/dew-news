@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/auth";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getUserId } from "@/lib/user";
 
 const NAV_LINKS = [
   { href: "/feed", label: "Feed" },
@@ -11,6 +13,12 @@ const NAV_LINKS = [
   { href: "/search", label: "Search" },
   { href: "/settings", label: "Settings" },
 ];
+
+/** Section 12.4: orange badge for unacknowledged conflicts, blue for active (non-dismissed) correlations. */
+const BADGE_COLOUR: Record<string, string> = {
+  "/conflicts": "bg-amber-500",
+  "/correlations": "bg-accent",
+};
 
 /** Section 9.1: mobile bottom tab bar covers the 5 most-used views. */
 const MOBILE_NAV_LINKS = [
@@ -29,14 +37,40 @@ export default async function DashboardLayout({
   const session = await auth();
   if (!session?.user) redirect("/login");
 
+  const supabase = createServiceClient();
+  const userId = await getUserId(supabase);
+  const { count: unacknowledgedConflicts } = await supabase
+    .from("conflicts")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("acknowledged", false)
+    .eq("is_resolved", false);
+  const { count: activeCorrelations } = await supabase
+    .from("correlations")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("is_dismissed", false);
+
+  const badgeCounts: Record<string, number> = {
+    "/conflicts": unacknowledgedConflicts ?? 0,
+    "/correlations": activeCorrelations ?? 0,
+  };
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between border-b border-white/10 bg-card px-4 py-3">
         <span className="text-lg font-semibold text-white">dew-news</span>
         <nav className="hidden gap-4 text-sm text-gray-300 sm:flex">
           {NAV_LINKS.map((link) => (
-            <Link key={link.href} href={link.href} className="hover:text-white">
+            <Link key={link.href} href={link.href} className="flex items-center gap-1.5 hover:text-white">
               {link.label}
+              {badgeCounts[link.href] > 0 && (
+                <span
+                  className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs font-semibold text-white ${BADGE_COLOUR[link.href]}`}
+                >
+                  {badgeCounts[link.href]}
+                </span>
+              )}
             </Link>
           ))}
         </nav>

@@ -7,7 +7,7 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5c — cron automation built locally (see "Phase 5c — Cron Automation" below), not yet deployed to Vercel. Watchlist dynamic score recalculation and nav badges (the rest of 5c) not started.
+Phase 5c — complete. Cron automation, and nav badges all built (watchlist dynamic score recalculation deliberately skipped — see "Phase 5c — Nav Badges" below for why). Phase 5 (Section 15) is now fully done; Phase 6 (auto-digests) is next, not started.
 
 ## Fetch History + Duplicate-Email Prevention (2026-06-21)
 
@@ -48,7 +48,19 @@ Built per SPEC.md Section 14 + Section 15 Phase 5 task 1–2 (the only 5c items 
 - `npx tsc --noEmit` / `npm run build` — clean; `/api/cron/fetch` appears in the build's route list.
 - Local dev server: no `Authorization` header → 401; wrong secret → 401; correct secret outside the configured window → `{"skipped":true,...}` (current time was outside the default 06:00 SGT window, as expected).
 - **Not yet verified**: an actual successful cron-triggered fetch (correct secret + within window) — would need either a local clock override or a real Vercel deploy + waiting for/triggering the schedule.
-- **Not yet deployed**: `vercel.json` and the route exist locally/committed but Vercel won't pick up the cron schedule until this is deployed to production.
+- **Deployed**: pushed to `origin/main`; Kevin set `CRON_SECRET` in Vercel's project env vars (Production) to match `.env.local`. First real cron-triggered run expected ~06:00 SGT the next morning — not yet observed end-to-end (Vercel will redeploy on push, but a live cron fire hasn't been confirmed yet).
+
+## Phase 5c — Nav Badges (2026-06-21)
+
+Built per Section 12.4 (badge display rules) and Section 15 Phase 5 task 8 — the only remaining 5c task besides cron.
+
+- `app/(dashboard)/layout.tsx` — the desktop nav (`NAV_LINKS`) now shows a count badge next to "Conflicts" (amber, count of `conflicts` where `acknowledged = false AND is_resolved = false`) and "Correlations" (blue/accent, count of `correlations` where `is_dismissed = false`) when count > 0. Computed server-side on every dashboard layout render via two `count: "exact", head: true` queries — cheap enough not to need caching. The mobile bottom tab bar doesn't include Conflicts/Correlations links at all (Section 9.1's 5-tab limit), so no mobile badge work was needed.
+- **Decision: watchlist dynamic score recalculation (the other 5c task) deliberately not built.** The spec's schema has `watchlist.dynamic_score`/`dynamic_window_days` columns meant to be written nightly by cron (Section 11.2), but `/watchlist`'s "Trending This Week" section (built back in Phase 2b) already computes mention counts live on every page load by querying `item_entities` directly — more accurate than a once-daily batch, and nothing in the UI reads the `dynamic_score` column today. Flagged to Kevin directly; he chose to skip the nightly-persistence mechanism rather than write to a column nothing reads. The schema columns remain unused by design — not a bug, a deliberate simplification.
+
+### Verified
+- `npx tsc --noEmit` / `npm run build` — clean.
+- Direct query confirmed the badge counts match the DB (0 unacknowledged conflicts, 5 active correlations at time of writing).
+- Dev server restarted clean; `/feed` responds (redirects to `/login` unauthenticated, as expected). Visual badge rendering not screenshot-tested (no authenticated browser session in this environment) — worth a quick look next time Kevin's logged in.
 
 ## Phase 4/5a/5b End-to-End Verification + Bug Fixes (2026-06-21)
 
