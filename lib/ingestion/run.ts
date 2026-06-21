@@ -10,6 +10,7 @@ import { estimateCostUsd, logTokenUsage } from "@/lib/ingestion/token-usage";
 import { buildRagContext } from "@/lib/ingestion/rag";
 import { runConflictDetection, runCorrelationDetection } from "@/lib/ingestion/intelligence";
 import { getAIProvider, type AIProvider } from "@/lib/ai/provider";
+import { ModelOutputParseError } from "@/lib/ai/utils";
 import type { FetchRunsRow, ItemsRow, SettingsRow } from "@/types/database";
 
 function getHeader(headers: { name?: string | null; value?: string | null }[] | undefined, name: string) {
@@ -156,28 +157,69 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
           level: "error",
           stage: "extract",
           message: `Failed to process email "${subject ?? "(no subject)"}": ${message}`,
-          metadata: { digest_id: digest.id },
+          metadata: {
+            digest_id: digest.id,
+            ...(err instanceof ModelOutputParseError ? { raw_model_output: err.rawText } : {}),
+          },
         });
       }
     }
 
-    const dedupResult = await runDedupPass(supabase, userId, fetchRun.id, provider, settings, allSavedItems);
-    totalInputTokens += dedupResult.inputTokens;
-    totalOutputTokens += dedupResult.outputTokens;
+    let dedupResult: { count: number; inputTokens: number; outputTokens: number; duplicateIds: Set<string> };
+    try {
+      dedupResult = await runDedupPass(supabase, userId, fetchRun.id, provider, settings, allSavedItems);
+      totalInputTokens += dedupResult.inputTokens;
+      totalOutputTokens += dedupResult.outputTokens;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await writeLog(supabase, {
+        userId,
+        fetchRunId: fetchRun.id,
+        level: "error",
+        stage: "dedup",
+        message: `Deduplication pass failed, continuing without it: ${message}`,
+        metadata: err instanceof ModelOutputParseError ? { raw_model_output: err.rawText } : {},
+      });
+      dedupResult = { count: 0, inputTokens: 0, outputTokens: 0, duplicateIds: new Set() };
+    }
 
     const nonDuplicateItems = allSavedItems.filter((item) => !dedupResult.duplicateIds.has(item.id));
     let conflictsDetected = 0;
     let correlationsDetected = 0;
     for (const item of nonDuplicateItems) {
-      const conflictResult = await runConflictDetection(supabase, userId, fetchRun.id, provider, settings, item);
-      totalInputTokens += conflictResult.inputTokens;
-      totalOutputTokens += conflictResult.outputTokens;
-      conflictsDetected += conflictResult.count;
+      try {
+        const conflictResult = await runConflictDetection(supabase, userId, fetchRun.id, provider, settings, item);
+        totalInputTokens += conflictResult.inputTokens;
+        totalOutputTokens += conflictResult.outputTokens;
+        conflictsDetected += conflictResult.count;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await writeLog(supabase, {
+          userId,
+          fetchRunId: fetchRun.id,
+          level: "error",
+          stage: "conflict",
+          message: `Conflict detection failed for item ${item.id}: ${message}`,
+          metadata: { item_id: item.id, ...(err instanceof ModelOutputParseError ? { raw_model_output: err.rawText } : {}) },
+        });
+      }
 
-      const correlationResult = await runCorrelationDetection(supabase, userId, fetchRun.id, provider, settings, item);
-      totalInputTokens += correlationResult.inputTokens;
-      totalOutputTokens += correlationResult.outputTokens;
-      correlationsDetected += correlationResult.count;
+      try {
+        const correlationResult = await runCorrelationDetection(supabase, userId, fetchRun.id, provider, settings, item);
+        totalInputTokens += correlationResult.inputTokens;
+        totalOutputTokens += correlationResult.outputTokens;
+        correlationsDetected += correlationResult.count;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await writeLog(supabase, {
+          userId,
+          fetchRunId: fetchRun.id,
+          level: "error",
+          stage: "correlate",
+          message: `Correlation detection failed for item ${item.id}: ${message}`,
+          metadata: { item_id: item.id, ...(err instanceof ModelOutputParseError ? { raw_model_output: err.rawText } : {}) },
+        });
+      }
     }
     if (nonDuplicateItems.length > 0) {
       await writeLog(supabase, {

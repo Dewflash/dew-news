@@ -8,12 +8,22 @@ import type {
   ExtractedItem,
   SummaryResult,
 } from "@/lib/ai/provider";
-import { parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
+import { createRateLimiter, parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
 import { buildConflictPrompt } from "@/lib/prompts/conflict";
 import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
 import type { ItemsRow } from "@/types/database";
+
+/**
+ * Gemini's free tier has a tight requests-per-minute cap, separate from
+ * total token quota — a fetch run's burst of extract/dedup/conflict/
+ * correlation calls can exceed it even with plenty of tokens left. Module-
+ * level so it's shared across every GeminiProvider instance in this
+ * process (a new instance is created per fetch run, but the limit is
+ * per-API-key, not per-run). Starts at 10 RPM and widens on actual 429s.
+ */
+const geminiRateLimiter = createRateLimiter(6_000);
 
 /** Section 6.1/6.2/15 Phase 5 task 9 — Gemini implementation of the unified AIProvider interface. */
 export class GeminiProvider implements AIProvider {
@@ -35,17 +45,19 @@ export class GeminiProvider implements AIProvider {
    * forces raw JSON instead of markdown-fenced JSON.
    */
   private async call(prompt: string, temperature: number, maxOutputTokens: number) {
-    return withRetry(() =>
-      this.client.models.generateContent({
-        model: this.model,
-        contents: prompt,
-        config: {
-          temperature,
-          maxOutputTokens,
-          responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      })
+    return withRetry(
+      () =>
+        this.client.models.generateContent({
+          model: this.model,
+          contents: prompt,
+          config: {
+            temperature,
+            maxOutputTokens,
+            responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        }),
+      geminiRateLimiter
     );
   }
 
