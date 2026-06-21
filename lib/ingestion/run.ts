@@ -363,7 +363,7 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
 }
 
 /** Section 7.1 step 4 / 7.3: dedup new items against existing items from today, across all sources/runs. */
-async function runDedupPass(
+export async function runDedupPass(
   supabase: ReturnType<typeof createServiceClient>,
   userId: string,
   fetchRunId: string,

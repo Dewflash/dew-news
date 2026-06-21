@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { runFetch, processDigestEmail } from "@/lib/ingestion/run";
+import { runFetch, processDigestEmail, runDedupPass } from "@/lib/ingestion/run";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getUserId } from "@/lib/user";
 import { getAIProvider } from "@/lib/ai/provider";
@@ -21,8 +21,12 @@ export async function triggerFetch() {
  * Reprocesses one previously failed digest from its stored `raw_body`
  * (Settings' fetch history "Retry" button) — no fresh Gmail fetch, since
  * the email body was already saved at the time of the original failure.
- * Runs extraction + save only; dedup/conflict/correlation detection for
- * this item will catch up on the next full fetch run.
+ * Runs extraction + save + same-day dedup, so retrying a digest whose
+ * underlying email already produced items elsewhere (e.g. a leftover
+ * duplicate digest row from before gmail_message_id tracking existed)
+ * doesn't silently re-save the same stories as fresh items. Conflict/
+ * correlation detection for this item will still catch up on the next
+ * full fetch run.
  */
 export async function reprocessDigest(digestId: string) {
   const supabase = createServiceClient();
@@ -43,7 +47,7 @@ export async function reprocessDigest(digestId: string) {
   const ragContext = await buildRagContext(supabase, userId, settings);
 
   try {
-    await processDigestEmail(
+    const savedItems = await processDigestEmail(
       supabase,
       userId,
       digest.fetch_run_id,
@@ -56,6 +60,7 @@ export async function reprocessDigest(digestId: string) {
       ragContext,
       () => {}
     );
+    await runDedupPass(supabase, userId, digest.fetch_run_id, provider, settings, savedItems);
     await supabase
       .from("digests")
       .update({ reprocessed: true, reprocessed_at: new Date().toISOString() })
