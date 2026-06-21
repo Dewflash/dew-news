@@ -7,7 +7,31 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5b — RAG context + conflict/correlation detection — built in full (see below). 5c (cron automation, watchlist dynamic scores, nav badges) not started.
+Phase 5b — RAG context + conflict/correlation detection — built and now verified end-to-end against real Gmail + Gemini (see "Phase 4/5a/5b End-to-End Verification" below). 5c (cron automation, watchlist dynamic scores, nav badges) not started.
+
+## Phase 4/5a/5b End-to-End Verification + Bug Fixes (2026-06-21)
+
+First real end-to-end run of the full pipeline (Gmail → Gemini extraction → save → dedup → conflict/correlation detection), using `gemini-2.5-flash` (Kevin's chosen primary provider, free tier). Surfaced and fixed several real bugs:
+
+- **Gemini JSON truncation**: `gemini-2.5-flash` spends part of `maxOutputTokens` on internal "thinking" tokens before visible output, silently truncating extraction JSON. Fixed in `lib/gemini.ts` via `thinkingConfig: { thinkingBudget: 0 }` and `responseMimeType: "application/json"` (also removes markdown-fence wrapping), plus raised token ceilings (extract: 8192, others: 4096).
+- **Gemini free-tier rate limit (429s)**: a fetch run's burst of extract/dedup/conflict/correlation calls (one call per item for the latter two) exceeded Gemini's free-tier cap. Confirmed via a real 429 response: **5 requests/minute** for `gemini-2.5-flash`. Added a self-tuning rate limiter (`lib/ai/utils.ts` `createRateLimiter()`), module-level in `lib/gemini.ts`, starting at the confirmed 5 RPM (13s spacing) and widening further on any actual 429. `withRetry()` now treats rate-limit errors distinctly — waiting on the provider's own suggested `retryDelay` when present, instead of the short generic exponential backoff.
+- **Parse-failure errors only logged the first 500 chars** of the model's raw output, discarding the rest. New `ModelOutputParseError` (in `lib/ai/utils.ts`) carries the full untruncated text through to `processing_log.metadata` (JSONB, no size constraint).
+- **One rate-limited call could fail an entire otherwise-successful run.** Dedup and per-item conflict/correlation calls are now individually try/caught in `lib/ingestion/run.ts`, logging and continuing rather than aborting the whole run — consistent with Section 17.2's "partial success is acceptable, silent failure is not."
+- **Dedup pass date bug**: `runDedupPass()`'s "existing items from today" filter compared `items.date` (the news *event* date, which Section 7.2 explicitly allows to be backdated) against today's calendar date — so re-processing the same email twice in one day never matched as a duplicate unless the model happened to date the event as today. Fixed to compare `created_at` instead, matching the spec's actual intent ("items already processed today").
+- **Failed runs silently discarded real partial progress.** If a run failed after emails were already extracted and saved (e.g. during dedup), the outer error handler reported `items_extracted: 0` and `status: "failed"` even though real item rows were already committed. `runFetch()` now tracks counts outside the `try` block and reports them accurately in the catch path, using `"partial"` status when appropriate.
+
+### Verified
+- **Real end-to-end run succeeded**: a real Reuters "Weekend Briefing" email was fetched via Gmail, 6 items extracted via Gemini (`gemini-2.5-flash`), saved with correct categories/sentiment/entities, matching the actual email content (spot-checked against `digests.raw_body`).
+- `npx tsc --noEmit` / `npm run build` — clean after all fixes.
+- This closes out the Phase 4 acceptance criteria that had been pending since Phase 4's session end, using Gemini instead of Claude per Kevin's standing preference.
+
+### Data cleanup
+Phase 2a's seed data (`scripts/seed.ts`) was still live in the DB this whole time, mixed in with real fetched items. Deleted (kept the script itself for future re-seeding):
+- 14 seed `fetch_runs` (cascaded digests/items/item_entities) and the seed-only entities/watchlist/conflicts/correlations/summaries — confirmed no real items referenced the seed entity names before deleting.
+- Per Kevin's explicit request, also wiped *all* remaining data (the real test items/fetch_runs/conflicts/correlations/processing_log from this session's debugging) for a fully clean slate before the next real test — kept `sources` (Reuters/Bloomberg, real active config) and `token_usage` (real cost history) untouched.
+- Note: the static watchlist (CEG, Gold, Fed, MAS, STI) was deleted along with this — per Kevin, nothing should be hardcoded going forward; watchlist entities should only be added through the app's existing add-entity UI (`/watchlist`, already functional, not seed-dependent).
+
+---
 
 ## Phase 5b — RAG + Conflict/Correlation Detection (2026-06-21)
 
