@@ -6,7 +6,9 @@ import { buildSearchQuery } from "@/lib/gmail/query";
 import { matchSource } from "@/lib/ingestion/match-source";
 import { saveExtractedItem } from "@/lib/ingestion/save-item";
 import { writeLog } from "@/lib/ingestion/log";
-import { logTokenUsage } from "@/lib/ingestion/token-usage";
+import { estimateCostUsd, logTokenUsage } from "@/lib/ingestion/token-usage";
+import { buildRagContext } from "@/lib/ingestion/rag";
+import { runConflictDetection, runCorrelationDetection } from "@/lib/ingestion/intelligence";
 import { getAIProvider, type AIProvider } from "@/lib/ai/provider";
 import type { FetchRunsRow, ItemsRow, SettingsRow } from "@/types/database";
 
@@ -64,6 +66,7 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
     }
 
     const provider = getAIProvider(settings.active_provider, settings.active_model, settings.temperature);
+    const ragContext = await buildRagContext(supabase, userId, settings);
 
     let emailsProcessed = 0;
     let emailsFailed = 0;
@@ -96,7 +99,7 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
       try {
         if (!body.trim()) throw new Error("Email body was empty after extraction/cleaning.");
 
-        const { data: extractedItems, inputTokens, outputTokens } = await provider.extract(body);
+        const { data: extractedItems, inputTokens, outputTokens } = await provider.extract(body, ragContext);
         totalInputTokens += inputTokens;
         totalOutputTokens += outputTokens;
 
@@ -162,6 +165,30 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
     totalInputTokens += dedupResult.inputTokens;
     totalOutputTokens += dedupResult.outputTokens;
 
+    const nonDuplicateItems = allSavedItems.filter((item) => !dedupResult.duplicateIds.has(item.id));
+    let conflictsDetected = 0;
+    let correlationsDetected = 0;
+    for (const item of nonDuplicateItems) {
+      const conflictResult = await runConflictDetection(supabase, userId, fetchRun.id, provider, settings, item);
+      totalInputTokens += conflictResult.inputTokens;
+      totalOutputTokens += conflictResult.outputTokens;
+      conflictsDetected += conflictResult.count;
+
+      const correlationResult = await runCorrelationDetection(supabase, userId, fetchRun.id, provider, settings, item);
+      totalInputTokens += correlationResult.inputTokens;
+      totalOutputTokens += correlationResult.outputTokens;
+      correlationsDetected += correlationResult.count;
+    }
+    if (nonDuplicateItems.length > 0) {
+      await writeLog(supabase, {
+        userId,
+        fetchRunId: fetchRun.id,
+        level: "info",
+        stage: "fetch",
+        message: `Conflict/correlation pass: ${conflictsDetected} conflict(s), ${correlationsDetected} correlation(s) across ${nonDuplicateItems.length} item(s).`,
+      });
+    }
+
     const status = emailsFailed === 0 ? "success" : emailsProcessed > 0 ? "partial" : "failed";
 
     return await finishRun(supabase, fetchRun.id, userId, {
@@ -174,6 +201,7 @@ export async function runFetch(triggeredBy: "cron" | "manual"): Promise<FetchRun
       model_used: settings.active_model,
       total_input_tokens: totalInputTokens,
       total_output_tokens: totalOutputTokens,
+      estimated_cost_usd: estimateCostUsd(settings.active_model, totalInputTokens, totalOutputTokens) ?? 0,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -196,8 +224,8 @@ async function runDedupPass(
   provider: AIProvider,
   settings: SettingsRow,
   newItems: ItemsRow[]
-): Promise<{ count: number; inputTokens: number; outputTokens: number }> {
-  if (newItems.length === 0) return { count: 0, inputTokens: 0, outputTokens: 0 };
+): Promise<{ count: number; inputTokens: number; outputTokens: number; duplicateIds: Set<string> }> {
+  if (newItems.length === 0) return { count: 0, inputTokens: 0, outputTokens: 0, duplicateIds: new Set() };
 
   const today = new Date().toISOString().slice(0, 10);
   const newItemIds = newItems.map((i) => i.id);
@@ -209,7 +237,9 @@ async function runDedupPass(
     .eq("is_duplicate", false)
     .not("id", "in", `(${newItemIds.join(",")})`);
 
-  if (!existingItems || existingItems.length === 0) return { count: 0, inputTokens: 0, outputTokens: 0 };
+  if (!existingItems || existingItems.length === 0) {
+    return { count: 0, inputTokens: 0, outputTokens: 0, duplicateIds: new Set() };
+  }
 
   const { data: dedupResults, inputTokens, outputTokens } = await provider.dedup(newItems, existingItems);
 
@@ -225,6 +255,7 @@ async function runDedupPass(
   });
 
   let count = 0;
+  const duplicateIds = new Set<string>();
   for (const result of dedupResults) {
     if (!result.is_duplicate || !result.duplicate_of_id) continue;
     const duplicateItem = newItems[result.new_item_index];
@@ -233,7 +264,10 @@ async function runDedupPass(
       .from("items")
       .update({ is_duplicate: true, duplicate_of: result.duplicate_of_id })
       .eq("id", duplicateItem.id);
-    if (!error) count++;
+    if (!error) {
+      count++;
+      duplicateIds.add(duplicateItem.id);
+    }
   }
 
   await writeLog(supabase, {
@@ -244,7 +278,7 @@ async function runDedupPass(
     message: `Deduplication pass: ${count} of ${newItems.length} new item(s) marked as duplicates.`,
   });
 
-  return { count, inputTokens, outputTokens };
+  return { count, inputTokens, outputTokens, duplicateIds };
 }
 
 async function finishRun(

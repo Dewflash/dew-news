@@ -8,7 +8,9 @@ import type {
   ExtractedItem,
   SummaryResult,
 } from "@/lib/ai/provider";
-import { parseJsonArray, withRetry } from "@/lib/ai/utils";
+import { parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
+import { buildConflictPrompt } from "@/lib/prompts/conflict";
+import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
 import type { ItemsRow } from "@/types/database";
@@ -36,11 +38,8 @@ export class OpenAIProvider implements AIProvider {
     );
   }
 
-  async extract(newsletterBody: string, ragContext?: string): Promise<AICallResult<ExtractedItem[]>> {
-    const rag: RagContext | undefined = ragContext
-      ? { lookbackDays: 0, watchlistEntities: "", recentItemsSummary: ragContext }
-      : undefined;
-    const prompt = buildExtractionPrompt(newsletterBody, rag);
+  async extract(newsletterBody: string, ragContext?: RagContext): Promise<AICallResult<ExtractedItem[]>> {
+    const prompt = buildExtractionPrompt(newsletterBody, ragContext);
 
     const response = await this.call(prompt, this.temperature, 4096);
     const data = parseJsonArray(response.choices[0]?.message.content ?? "") as ExtractedItem[];
@@ -78,11 +77,39 @@ export class OpenAIProvider implements AIProvider {
     throw new Error("OpenAIProvider.summarise is not implemented until Phase 6.");
   }
 
-  async detectConflicts(): Promise<AICallResult<ConflictResult[]>> {
-    throw new Error("OpenAIProvider.detectConflicts is not implemented until Phase 5b.");
+  async detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>> {
+    if (recentItems.length === 0) return { data: [], inputTokens: 0, outputTokens: 0 };
+
+    const prompt = buildConflictPrompt(
+      JSON.stringify(serializeItemForPrompt(newItem)),
+      JSON.stringify(recentItems.map(serializeItemForPrompt))
+    );
+
+    const response = await this.call(prompt, this.temperature, 2048);
+    const data = parseJsonArray(response.choices[0]?.message.content ?? "") as ConflictResult[];
+
+    return {
+      data,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+    };
   }
 
-  async detectCorrelations(): Promise<AICallResult<CorrelationResult[]>> {
-    throw new Error("OpenAIProvider.detectCorrelations is not implemented until Phase 5b.");
+  async detectCorrelations(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<CorrelationResult[]>> {
+    if (recentItems.length === 0) return { data: [], inputTokens: 0, outputTokens: 0 };
+
+    const prompt = buildCorrelationPrompt(
+      JSON.stringify(serializeItemForPrompt(newItem)),
+      JSON.stringify(recentItems.map(serializeItemForPrompt))
+    );
+
+    const response = await this.call(prompt, this.temperature, 2048);
+    const data = parseJsonArray(response.choices[0]?.message.content ?? "") as CorrelationResult[];
+
+    return {
+      data,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+    };
   }
 }

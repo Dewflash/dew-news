@@ -8,7 +8,9 @@ import type {
   ExtractedItem,
   SummaryResult,
 } from "@/lib/ai/provider";
-import { parseJsonArray, withRetry } from "@/lib/ai/utils";
+import { parseJsonArray, serializeItemForPrompt, withRetry } from "@/lib/ai/utils";
+import { buildConflictPrompt } from "@/lib/prompts/conflict";
+import { buildCorrelationPrompt } from "@/lib/prompts/correlation";
 import { buildDedupPrompt } from "@/lib/prompts/dedup";
 import { buildExtractionPrompt, type RagContext } from "@/lib/prompts/extraction";
 import type { ItemsRow } from "@/types/database";
@@ -43,11 +45,8 @@ export class ClaudeProvider implements AIProvider {
       .join("");
   }
 
-  async extract(newsletterBody: string, ragContext?: string): Promise<AICallResult<ExtractedItem[]>> {
-    const rag: RagContext | undefined = ragContext
-      ? { lookbackDays: 0, watchlistEntities: "", recentItemsSummary: ragContext }
-      : undefined;
-    const prompt = buildExtractionPrompt(newsletterBody, rag);
+  async extract(newsletterBody: string, ragContext?: RagContext): Promise<AICallResult<ExtractedItem[]>> {
+    const prompt = buildExtractionPrompt(newsletterBody, ragContext);
 
     const message = await this.call(prompt, this.temperature, 4096);
     const data = parseJsonArray(this.textOf(message)) as ExtractedItem[];
@@ -85,11 +84,39 @@ export class ClaudeProvider implements AIProvider {
     throw new Error("ClaudeProvider.summarise is not implemented until Phase 6.");
   }
 
-  async detectConflicts(): Promise<AICallResult<ConflictResult[]>> {
-    throw new Error("ClaudeProvider.detectConflicts is not implemented until Phase 5b.");
+  async detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>> {
+    if (recentItems.length === 0) return { data: [], inputTokens: 0, outputTokens: 0 };
+
+    const prompt = buildConflictPrompt(
+      JSON.stringify(serializeItemForPrompt(newItem)),
+      JSON.stringify(recentItems.map(serializeItemForPrompt))
+    );
+
+    const message = await this.call(prompt, this.temperature, 2048);
+    const data = parseJsonArray(this.textOf(message)) as ConflictResult[];
+
+    return {
+      data,
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    };
   }
 
-  async detectCorrelations(): Promise<AICallResult<CorrelationResult[]>> {
-    throw new Error("ClaudeProvider.detectCorrelations is not implemented until Phase 5b.");
+  async detectCorrelations(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<CorrelationResult[]>> {
+    if (recentItems.length === 0) return { data: [], inputTokens: 0, outputTokens: 0 };
+
+    const prompt = buildCorrelationPrompt(
+      JSON.stringify(serializeItemForPrompt(newItem)),
+      JSON.stringify(recentItems.map(serializeItemForPrompt))
+    );
+
+    const message = await this.call(prompt, this.temperature, 2048);
+    const data = parseJsonArray(this.textOf(message)) as CorrelationResult[];
+
+    return {
+      data,
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    };
   }
 }

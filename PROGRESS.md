@@ -7,7 +7,40 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5a — Provider expansion — built in full (see below). Kevin split Phase 5 (Section 15) into 5a/provider expansion → 5b/RAG+conflict+correlation detection → 5c/cron automation, reordered from the spec's task numbering so the provider swap (the thing actually unblocking real testing) comes first.
+Phase 5b — RAG context + conflict/correlation detection — built in full (see below). 5c (cron automation, watchlist dynamic scores, nav badges) not started.
+
+## Phase 5b — RAG + Conflict/Correlation Detection (2026-06-21)
+
+Built per SPEC.md Section 15 Phase 5 tasks 3–6, Section 7.4/7.5 prompts, and Section 12 (scope rules).
+
+- `lib/prompts/conflict.ts` / `lib/prompts/correlation.ts` — Section 7.4/7.5 prompts, copied verbatim (Section 19 Rule 6).
+- `lib/ai/utils.ts` — added `serializeItemForPrompt()`, a shared item-shape helper now reused by dedup/conflict/correlation prompt construction across all three providers (Claude/Gemini/OpenAI), avoiding triplicated inline mapping.
+- `lib/claude.ts` / `lib/gemini.ts` / `lib/openai.ts` — `detectConflicts()`/`detectCorrelations()` are now real implementations (previously explicit Phase-5b throw stubs), following the same call/parse/retry pattern as `extract()`/`dedup()`.
+- `lib/ai/provider.ts` — `AIProvider.extract()`'s second parameter changed from a flattened `ragContext?: string` placeholder to the full `RagContext` object (`lookbackDays`/`watchlistEntities`/`recentItemsSummary`), now that RAG is actually wired up instead of stubbed with empty values.
+- `lib/ingestion/rag.ts` (new) — `buildRagContext()`: when `settings.rag_context_enabled`, builds the Section 7.2 RAG block from active watchlist entities and significance=3 items within `rag_lookback_days`. Returns `undefined` when RAG is off, so the extraction prompt's `{{RAG_CONTEXT_BLOCK}}` placeholder resolves to nothing (existing `buildExtractionPrompt` behavior, unchanged).
+- `lib/ingestion/intelligence.ts` (new) — `runConflictDetection()`/`runCorrelationDetection()`, one call per newly-saved non-duplicate item:
+  - Conflict scope (Section 12.2): items from the last 90 days sharing the new item's GICS sector OR at least one entity (via `item_entities`), capped at 20 candidates.
+  - Correlation scope (Section 12.3): items from the last 30 days with a *different* category (GICS sector, falling back to the item's first extended category), capped at 20 candidates.
+  - Results are saved to `conflicts`/`correlations` with `entity_id`/`entity_a_id`/`entity_b_id` resolved by intersecting each item's linked entities (conflict: shared entity; correlation: each item's first entity, since the two items are by definition NOT sharing a category).
+  - Both call `logTokenUsage()` with the existing `"conflict"`/`"correlation"` call types (already in the `TokenCallType`/`LogStage` enums from Phase 1 — no schema change).
+- `lib/ingestion/run.ts` — `runFetch()` now: builds RAG context once per run (before the email loop) and passes it into every `extract()` call; after the dedup pass, runs conflict + correlation detection for every saved item that wasn't marked a duplicate (tracked via `runDedupPass()`'s new `duplicateIds` return value); the final `fetch_runs.estimated_cost_usd` (a pre-existing schema column that was never populated since Phase 4) is now computed from total input/output tokens at the end of the run, via a newly-exported `estimateCostUsd()` from `lib/ingestion/token-usage.ts`.
+
+### Verified
+- `npx tsc --noEmit` — clean.
+- `npm run build` — clean, all routes still compile.
+- **Not verified end-to-end** — same blocker as 5a/4b: no AI provider has a working API key yet. The Feed's conflict (⚠️)/correlation (🔗) icons and the `/conflicts`/`/correlations` views already read live from these tables (built in Phase 2a/2b against seed data), so they need no further UI work — they'll populate automatically once a real fetch run with a working provider produces rows.
+
+### Deviations / notes
+- **Conflict/correlation counts are not stored on `fetch_runs`** — unlike `items_deduplicated`, there's no `conflicts_detected`/`correlations_detected` column in Section 4.3's schema (Rule 2: don't change schema without flagging). Counts are written to `processing_log` instead (stage `"conflict"`/`"correlate"`), consistent with how the dedup pass already logs its own count.
+- **Correlation candidate query over-fetches then filters in JS** (`queryCorrelationCandidates` pulls up to 60 candidates by date range, then filters out same-category items before slicing to 20) rather than expressing "different category" as a single SQL filter, since category is derived from two different columns (`gics_sector` falling back to `secondary_categories[0]`) and Supabase's query builder doesn't cleanly express that OR/fallback logic in one `.neq()`. Acceptable for this app's data volume.
+- **`entity_a_id`/`entity_b_id` on `correlations` use each item's first linked entity**, not a "shared" entity (correlations are cross-category by definition, so there's rarely a shared entity to intersect on, unlike conflicts).
+
+### What Phase 5c needs
+- Vercel cron job (`vercel.json`, Section 14.1) + secret-verified `/api/cron/fetch` endpoint — `runFetch("cron")` already supports this trigger type, just unwired.
+- Watchlist dynamic score recalculation (nightly).
+- Unacknowledged conflict/correlation badges on nav (Section 12.4) — the feed-card icons and the dedicated `/conflicts`/`/correlations` views already exist; only the nav badge counts are missing.
+
+---
 
 ## Phase 5a — Provider Expansion (2026-06-21)
 
@@ -31,15 +64,7 @@ Built per SPEC.md Section 15 Phase 5 tasks 9–10 only (Gemini/OpenAI provider i
 - Used `@google/genai` (Google's current unified GenAI SDK, v2.x) rather than the older `@google/generative-ai` package, which is the predecessor SDK — consistent with Section 19 Rule 7 (choose the closest current alternative).
 - Reordered Phase 5's task list (5a provider swap before 5b RAG/conflict/correlation) per Kevin's explicit instruction, since he does not intend to fund Claude API access and needs a working non-Anthropic provider before 4b/4c can be exercised at all.
 
-### What Phase 5b needs
-- RAG context building (`extract()`'s `ragContext` param already exists on all three providers, still unused).
-- Conflict detection pass (Section 7.4 prompt) + correlation detection pass (Section 7.5 prompt), both currently throwing on all three providers by design.
-- Conflict/correlation records saved to DB.
-
-### What Phase 5c needs
-- Vercel cron job (`vercel.json`, Section 14.1) + secret-verified `/api/cron/fetch` endpoint — `runFetch("cron")` already supports this trigger type, just unwired.
-- Watchlist dynamic score recalculation (nightly).
-- Unacknowledged conflict/correlation badges on nav.
+(5b and 5c built next — see the "Phase 5b" section above this one for what followed, and its "What Phase 5c needs" list for what's still outstanding.)
 
 ---
 

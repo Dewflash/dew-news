@@ -2,6 +2,7 @@ import type { ItemSentence, ItemsRow, Sentiment, Significance } from "@/types/da
 import { ClaudeProvider } from "@/lib/claude";
 import { GeminiProvider } from "@/lib/gemini";
 import { OpenAIProvider } from "@/lib/openai";
+import type { RagContext } from "@/lib/prompts/extraction";
 
 export interface ExtractedEntity {
   name: string;
@@ -59,13 +60,12 @@ export interface AICallResult<T> {
 }
 
 /**
- * Unified interface every provider implements (Section 6.1). Conflict
- * detection, correlation detection, and summarisation are Phase 5/6
- * pipeline stages (Section 15) — declared here so the interface is stable
- * across phases, but only `extract` and `dedup` are implemented in Phase 4.
+ * Unified interface every provider implements (Section 6.1). Summarisation
+ * is a Phase 6 pipeline stage (Section 15) — declared here so the interface
+ * is stable across phases, but not implemented until then.
  */
 export interface AIProvider {
-  extract(newsletterBody: string, ragContext?: string): Promise<AICallResult<ExtractedItem[]>>;
+  extract(newsletterBody: string, ragContext?: RagContext): Promise<AICallResult<ExtractedItem[]>>;
   dedup(newItems: ItemsRow[], existingItems: ItemsRow[]): Promise<AICallResult<DedupResult[]>>;
   summarise(items: ItemsRow[], type: "weekly" | "monthly"): Promise<AICallResult<SummaryResult>>;
   detectConflicts(newItem: ItemsRow, recentItems: ItemsRow[]): Promise<AICallResult<ConflictResult[]>>;

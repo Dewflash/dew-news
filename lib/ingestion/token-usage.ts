@@ -17,7 +17,7 @@ const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
 
-function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number | null {
+export function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number | null {
   const pricing = PRICING_PER_MILLION_TOKENS[model];
   if (!pricing) return null;
   return (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;

@@ -1,3 +1,5 @@
+import type { ItemsRow } from "@/types/database";
+
 const MAX_RETRIES = 3;
 
 /** Section 17.2: exponential backoff, max 3 retries, on any AI API call. */
@@ -33,4 +35,16 @@ export function parseJsonArray(text: string): unknown[] {
     throw new Error(`Expected a JSON array, got: ${text.slice(0, 500)}`);
   }
   return parsed;
+}
+
+/** Shared item shape passed into dedup/conflict/correlation prompts — just enough for the model to compare items. */
+export function serializeItemForPrompt(item: ItemsRow) {
+  return {
+    id: item.id,
+    summary: item.summary,
+    full_context: item.full_context,
+    date: item.date,
+    gics_sector: item.gics_sector,
+    secondary_categories: item.secondary_categories,
+  };
 }
