@@ -27,12 +27,24 @@ export class GeminiProvider implements AIProvider {
     this.temperature = temperature;
   }
 
+  /**
+   * Gemini 2.5 models spend part of `maxOutputTokens` on internal "thinking"
+   * tokens before producing visible output, which was silently truncating
+   * our JSON responses. `thinkingBudget: 0` disables that (we just need a
+   * direct JSON answer, not a reasoning chain), and `responseMimeType`
+   * forces raw JSON instead of markdown-fenced JSON.
+   */
   private async call(prompt: string, temperature: number, maxOutputTokens: number) {
     return withRetry(() =>
       this.client.models.generateContent({
         model: this.model,
         contents: prompt,
-        config: { temperature, maxOutputTokens },
+        config: {
+          temperature,
+          maxOutputTokens,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       })
     );
   }
@@ -40,7 +52,7 @@ export class GeminiProvider implements AIProvider {
   async extract(newsletterBody: string, ragContext?: RagContext): Promise<AICallResult<ExtractedItem[]>> {
     const prompt = buildExtractionPrompt(newsletterBody, ragContext);
 
-    const response = await this.call(prompt, this.temperature, 4096);
+    const response = await this.call(prompt, this.temperature, 8192);
     const data = parseJsonArray(response.text ?? "") as ExtractedItem[];
 
     return {
@@ -62,7 +74,7 @@ export class GeminiProvider implements AIProvider {
       JSON.stringify(existingItems.map((item) => ({ id: item.id, summary: item.summary, full_context: item.full_context, date: item.date })))
     );
 
-    const response = await this.call(prompt, this.temperature, 2048);
+    const response = await this.call(prompt, this.temperature, 4096);
     const data = parseJsonArray(response.text ?? "") as DedupResult[];
 
     return {
@@ -84,7 +96,7 @@ export class GeminiProvider implements AIProvider {
       JSON.stringify(recentItems.map(serializeItemForPrompt))
     );
 
-    const response = await this.call(prompt, this.temperature, 2048);
+    const response = await this.call(prompt, this.temperature, 4096);
     const data = parseJsonArray(response.text ?? "") as ConflictResult[];
 
     return {
@@ -102,7 +114,7 @@ export class GeminiProvider implements AIProvider {
       JSON.stringify(recentItems.map(serializeItemForPrompt))
     );
 
-    const response = await this.call(prompt, this.temperature, 2048);
+    const response = await this.call(prompt, this.temperature, 4096);
     const data = parseJsonArray(response.text ?? "") as CorrelationResult[];
 
     return {
