@@ -21,7 +21,8 @@
     "next-auth": "^5.0.0-beta.31",
     "openai": "^6.44.0",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "yahoo-finance2": "^3.15.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
