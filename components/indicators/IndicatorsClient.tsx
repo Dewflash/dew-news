@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { IndicatorRow, type IndicatorRowData } from "@/components/indicators/IndicatorRow";
+import { IndicatorCard, type IndicatorCardData } from "@/components/indicators/IndicatorCard";
 import { triggerMacroBackfill, triggerMacroFetch } from "@/lib/actions/macro";
 import type { CycleType } from "@/types/database";
 
@@ -15,7 +15,7 @@ const GROUP_ORDER: CycleType[] = ["leading", "coincident", "lagging"];
 export function IndicatorsClient({
   groups,
 }: {
-  groups: Record<CycleType, IndicatorRowData[]>;
+  groups: Record<CycleType, IndicatorCardData[]>;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +74,9 @@ export function IndicatorsClient({
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-400">
                 {GROUP_LABELS[cycleType]}
               </h2>
-              <div className="space-y-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {rows.map((indicator) => (
-                  <IndicatorRow key={indicator.id} indicator={indicator} />
+                  <IndicatorCard key={indicator.id} indicator={indicator} />
                 ))}
               </div>
             </div>

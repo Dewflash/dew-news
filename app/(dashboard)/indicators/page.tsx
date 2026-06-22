@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { getUserId } from "@/lib/user";
 import { IndicatorsClient } from "@/components/indicators/IndicatorsClient";
-import type { IndicatorRowData } from "@/components/indicators/IndicatorRow";
+import type { IndicatorCardData } from "@/components/indicators/IndicatorCard";
 import type { CycleType, MacroIndicatorReadingsRow, MacroIndicatorsRow } from "@/types/database";
 
 export default async function IndicatorsPage() {
@@ -31,7 +31,7 @@ export default async function IndicatorsPage() {
     }
   }
 
-  const groups: Record<CycleType, IndicatorRowData[]> = { leading: [], coincident: [], lagging: [] };
+  const groups: Record<CycleType, IndicatorCardData[]> = { leading: [], coincident: [], lagging: [] };
   for (const indicator of indicators ?? []) {
     const reading = latestReadingByIndicator.get(indicator.id);
     groups[indicator.cycle_type].push({
