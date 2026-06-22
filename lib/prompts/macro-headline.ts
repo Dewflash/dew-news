@@ -24,8 +24,17 @@ Return JSON only, no other text:
   "found": <true or false>
 }`;
 
+/**
+ * Real corporate sites carry tens of KB of nav/footer/cookie-banner text
+ * before the actual press-release content — a Consumer Confidence fetch
+ * failed in production because a 12,000-char cutoff never reached the real
+ * text. 60,000 chars (~15K tokens) is cheap for a single short extraction
+ * call and comfortably covers any of this dashboard's source pages.
+ */
+const MAX_PAGE_TEXT_CHARS = 60_000;
+
 export function buildMacroHeadlinePrompt(indicatorName: string, instruction: string, pageText: string): string {
   return MACRO_HEADLINE_PROMPT_TEMPLATE.replace("{{indicator_name}}", indicatorName)
     .replace("{{instruction}}", instruction)
-    .replace("{{page_text}}", pageText.slice(0, 12_000));
+    .replace("{{page_text}}", pageText.slice(0, MAX_PAGE_TEXT_CHARS));
 }

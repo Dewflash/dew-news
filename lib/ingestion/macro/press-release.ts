@@ -1,10 +1,21 @@
 import type { AIProvider } from "@/lib/ai/provider";
 
-/** Strips tags/scripts down to plain text — good enough for a model to read prose from, not a layout-faithful render. */
+/**
+ * Strips tags/scripts/nav-boilerplate down to plain text — good enough for a
+ * model to read prose from, not a layout-faithful render. Real corporate
+ * sites (conference-board.org, ismworld.org) carry tens of KB of nav/header/
+ * footer/cookie-banner markup before the actual press-release text, so this
+ * also drops those elements rather than just scripts/styles (a Consumer
+ * Confidence fetch failed in production because the truncated text never
+ * reached the real content — see press-release.ts history).
+ */
 function htmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
+    .replace(/<header[\s\S]*?<\/header>/gi, " ")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")

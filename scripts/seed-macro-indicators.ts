@@ -28,9 +28,12 @@ async function main() {
       cycle_type: "leading",
       frequency: "Monthly (1st business day)",
       source_name: "Institute for Supply Management",
-      source_url: "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-pmi-reports/pmi/",
+      // ismworld.org's own listing page redirects to a member-login wall; ISM's
+      // press releases are freely mirrored to PRNewswire's stable newsroom URL
+      // instead (confirmed working, headline % is in the release title itself).
+      source_url: "https://www.prnewswire.com/news/institute-for-supply-management/",
       fred_series_id: null,
-      press_release_url: "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-pmi-reports/pmi/",
+      press_release_url: "https://www.prnewswire.com/news/institute-for-supply-management/",
       lead_lag_months: "1-3 months",
       threshold_rule: ">50 = expanding; <45 sustained = recession risk; watch New Orders sub-index",
       direction_rule_key: "pmi_50",
@@ -45,9 +48,9 @@ async function main() {
       cycle_type: "leading",
       frequency: "Monthly (3rd business day)",
       source_name: "Institute for Supply Management",
-      source_url: "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-pmi-reports/services/",
+      source_url: "https://www.prnewswire.com/news/institute-for-supply-management/",
       fred_series_id: null,
-      press_release_url: "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-pmi-reports/services/",
+      press_release_url: "https://www.prnewswire.com/news/institute-for-supply-management/",
       lead_lag_months: "1-2 months",
       threshold_rule: "Same 50 threshold; services is ~70% of US GDP — often diverges from manufacturing",
       direction_rule_key: "pmi_50",
