@@ -7,7 +7,42 @@
 **Phase 3 — Annotation Layer** ✅ (completed 2026-06-21)
 
 ## Current Phase
-Phase 5 (Section 15) and Phase 6 ("Digests & Polish") are complete — this was the full SPEC.md scope. **Macro Indicators Dashboard** (a separate, out-of-spec feature requested directly by Kevin — see `dashboard.md` for the full design) is built but **not yet live**: code is complete and typechecks/builds clean, but three manual setup steps are still needed before it works (see below).
+Phase 5 (Section 15) and Phase 6 ("Digests & Polish") are complete — this was the full SPEC.md scope.
+
+Two out-of-spec features have been added since, at Kevin's direct request:
+- **Macro Indicators Dashboard** (see `dashboard.md`) — **live and confirmed working** with real data (migration applied, seeded, `FRED_API_KEY` set locally, 3 broken data sources found in production and fixed). One env var gap remains: `FRED_API_KEY` is only in local `.env.local`, not yet added to Vercel — tonight's cron will fail for FRED-backed indicators in production until that's added.
+- **Market Explanation Engine** (see `dewnews.md`) — **early/foundational stage only**, paused here. Scoping decisions are made and the price-data layer is built and live-tested, but no snapshot table, event detection, cron, or UI exists yet. Full status below.
+
+## Market Explanation Engine (2026-06-22) — paused mid-build, foundation only
+
+Goal (per `dewnews.md`, since rescoped to fit this app rather than built as a separate Python service): explain "why did the market move" by detecting price moves on watchlist entities and linking them to already-ingested news within a time window.
+
+**Scoping decisions made (all final, see conversation/dewnews.md):**
+1. Build inside dew-news — no separate project/service.
+2. Track whatever's currently on the `watchlist` table, queried live each cycle — no hardcoded entity list.
+3. Researched 4 free intraday price APIs before committing to any: Alpha Vantage (free tier has no intraday access at all — premium-only), Finnhub (free tier's candle/intraday endpoint returns 403, paid-only), Twelve Data (free tier covers equities/forex/crypto but **not** commodities or indices — confirmed via their own pricing page), Polygon.io/Massive (rebranded, free-tier scope unconfirmed, not pursued further).
+4. Detection cadence: GitHub Actions cron hitting a dew-news API route — not a Vercel cron change (Hobby tier's single cron slot stays dedicated to the existing daily fetch).
+5. Reuse existing ingested news items only — no new/faster news pipeline.
+6. Extend the existing correlation detector rather than building a parallel system.
+7. Output: a new dedicated page, same pattern as `/indicators`.
+8. Not urgent — build properly, no rush.
+
+**Built so far (price-data layer only):**
+- `lib/ingestion/prices/yahoo.ts` — wraps `yahoo-finance2` (npm, unofficial Yahoo Finance API) for commodities/indices, since Twelve Data's free tier doesn't cover those. Flagged clearly in comments: this library has a documented history of breaking (crumb/cookie auth issues, recurring as recently as Dec 2025) — every call is designed to fail loudly into `processing_log` rather than silently, same pattern as the Macro Indicators Dashboard's FRED-failure case.
+- `lib/ingestion/prices/twelvedata.ts` — plain REST client for Twelve Data's `/quote` endpoint (equities/crypto/forex). Needs a `TWELVEDATA_API_KEY` env var that does **not exist yet** anywhere (not `.env.local`, not Vercel) — free signup at twelvedata.com.
+- `lib/ingestion/prices/symbol-map.ts` — maps a watchlist entity to a provider+symbol: `equity`/`crypto`/`currency` use the entity's own ticker against Twelve Data; `commodity`/`index` use a name-lookup table against Yahoo's symbol format (e.g. "Gold" → `GC=F`, "Straits Times Index" → `^STI`); `country`/`person`/`institution`/`other` are skipped silently (no price exists for them, by design). Unmapped-but-priceable entities (e.g. a commodity name not in the lookup table) log a warning rather than guessing.
+
+**Verified:** `npx tsc --noEmit` and `npm run build` clean. Live-tested directly against both real endpoints (not just docs) before committing — `GC=F`, `^GSPC`, `^STI` all returned correct current prices via Yahoo; symbol-mapping correctly returned `null` for a `person`-type entity.
+
+**Explicitly not built yet** — paused here, per Kevin taking a break, not because anything failed:
+- The snapshot table (need our own rolling price-history storage in Supabase, since neither free API gives a usable intraday-candles history — the plan is to poll the quote endpoints above on a schedule and store snapshots ourselves, comparing against an earlier snapshot to detect a move).
+- Event detection logic (the "did this move >1% in a 3-4h window" check).
+- The GitHub Actions cron + API route it hits.
+- The correlation-detector extension (linking a detected price move to candidate causal news items).
+- The new page/UI.
+- `TWELVEDATA_API_KEY` provisioning.
+
+**Next session should start by:** re-reading this section + `dewnews.md` in full before resuming, then picking up at the snapshot-table design (the next undecided piece — what schema, how far back to keep history, which entities get tracked vs silently skipped at runtime).
 
 ## Macro Indicators Dashboard (2026-06-22)
 
@@ -24,16 +59,20 @@ New page at `/indicators`, design fully resolved in `dashboard.md` before any co
 - Wired into the existing daily cron (`app/api/cron/fetch/route.ts`) — same Hobby-tier single-cron constraint as digests, piggybacks on the one daily invocation. Also exposed as manual actions (`lib/actions/macro.ts`: `triggerMacroFetch`, `triggerMacroBackfill`) from buttons on the `/indicators` page itself.
 - UI: `components/ui/StatDirectionBadge.tsx` (deliberately not named "SentimentBadge" — that name already means something different elsewhere in this app), `components/indicators/IndicatorRow.tsx` (click to expand: threshold rule, lead/lag window, analyst note, source link), `components/indicators/IndicatorsClient.tsx` (grouped by cycle type), `app/(dashboard)/indicators/page.tsx` + `loading.tsx`. Nav entry added to the desktop top nav only, per dashboard.md decision 2 — mobile bottom bar stays at its existing 5 slots; a link to `/indicators` was added inside Settings (mobile-only, `sm:hidden`) instead.
 
+**Update (2026-06-22, after going live):** migration applied, `npm run seed:macro` run, `FRED_API_KEY` set in local `.env.local`, real data confirmed flowing (S&P 500, Unemployment Rate w/ Sahm Rule direction, Yield Curve, etc. all populated with real numbers). Indicator cards redesigned into a grid layout per Kevin's feedback (`components/indicators/IndicatorCard.tsx`, 4/row desktop). Three indicators were found broken in production and fixed: ISM Manufacturing/Services PMI (ismworld.org's listing page redirects to a login wall — switched to PRNewswire's stable newsroom mirror) and Consumer Confidence (CB) (the 12,000-char page-text truncation never reached the real content past nav/footer boilerplate on a real corporate site — bumped to 60,000 chars and now strips nav/header/footer tags too). All three verified against production with correct real-world values after the fix.
+
+**⚠️ Operational note:** `npm run seed:macro` is destructive to history, not just the catalog — it deletes-then-reinserts `macro_indicators`, which cascades to delete all `macro_indicator_readings` too. Don't re-run it casually; re-run `triggerMacroBackfill`/`triggerMacroFetch` afterward to restore history if you do.
+
 **Known gaps, flagged honestly rather than papered over:**
 - **Baltic Dry Index has no free source at all**, discovered during this build (not part of the original 5-indicator source research). The Baltic Exchange's own API is subscription-only, and unlike the other non-FRED indicators there's no free press release with the headline number either. This row will show "Data unavailable" indefinitely unless a paid source is added later.
-- **`FRED_API_KEY` is not yet provisioned** — every FRED-backed indicator (14 of 19) will show "Data unavailable" until Kevin signs up for the free key and adds it to `.env.local` and Vercel's env vars.
+- **`FRED_API_KEY` is set locally but NOT in Vercel's env vars yet** — tonight's cron (22:00 UTC) will fail for all 14 FRED-backed indicators in production until it's added there too (`vercel env add FRED_API_KEY`, or via the dashboard).
 - Cron's `maxDuration = 60` (`app/api/cron/fetch/route.ts`) could in theory truncate mid-loop with 19 sequential indicator fetches (5 of which involve an AI call) on a slow day — non-fatal (each indicator commits its own row before moving to the next), just means a stale indicator catches up on a later day rather than that exact run.
 - UMich Sentiment's "5yr inflation expectation > 3%" override (dashboard.md's direction rule) isn't wired in — `direction.ts` currently only checks simple MoM sign for this indicator, same as Consumer Confidence.
+- Several direction badges are still null/N/A and will stay that way for a few weeks until rolling windows (Sahm Rule's 12-month low, 4-week claims MA, etc.) accumulate enough backfilled/cron-fetched history — expected, not a bug.
 
 **Verified:**
-- `npx tsc --noEmit` clean.
-- `npm run build` clean — the one error printed during the build (`Could not find the table 'public.macro_indicators'`) is Next.js's prerender step correctly hitting the live DB before the migration has been applied; expected, not a code bug.
-- **Not yet tested against real data** — blocked on the three manual steps above (run migration, run `npm run seed:macro`, add `FRED_API_KEY`). Once those are done, `/indicators` will need an actual visual check in the browser, which I cannot do myself in this session.
+- `npx tsc --noEmit` and `npm run build` clean throughout.
+- Confirmed against live production data after the migration/seed/key were in place (see update above) — no longer blocked.
 
 ## Phase 6c — Mobile Pass, Loading Skeletons, Optimistic UI, Error States (2026-06-21)
 
